@@ -67,6 +67,7 @@ export default function TemplateManager({apiPrefix}:{apiPrefix:string}) {
       if (doc?.body && doc.body.innerHTML !== cleanHtml) {
         const sel = doc.getSelection();
         const hadFocus = doc.hasFocus();
+        // nosemgrep: insecure-innerhtml -- cleanHtml 已经过 DOMPurify.sanitize() 清洗
         doc.body.innerHTML = cleanHtml;
         if (hadFocus && sel) { try { sel.selectAllChildren(doc.body); sel.collapseToEnd(); } catch {} }
       }
