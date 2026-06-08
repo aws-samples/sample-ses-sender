@@ -293,9 +293,6 @@ def send_bulk_email(
                         f"联系人={len(active_contacts)}(跳过退订{len(skipped_contacts)}), "
                         f"MaxSendRate={max_rate}/s")
 
-            def _ascii_tag(val: str) -> str:
-                return "".join(c if ord(c) < 128 and c not in ' "\'\\' else "_" for c in val)[:256] or "unknown"
-
             total_sent = 0
             error_msg = None
             has_failure = False
@@ -400,7 +397,7 @@ def send_bulk_email(
                             detail.send_error = short_err
                         if "Throttling" in err_str or "Rate exceeded" in err_str:
                             error_msg = short_err
-                            _time.sleep(2)
+                            _time.sleep(2)  # nosemgrep: arbitrary-sleep
 
                 total_sent += len(chunk)
                 bg_job.sent_count = total_sent
@@ -409,7 +406,7 @@ def send_bulk_email(
 
                 # 速率控制：每轮发完等 1 秒
                 if i + send_per_second < len(active_contacts):
-                    _time.sleep(1)
+                    _time.sleep(1)  # nosemgrep: arbitrary-sleep
 
             # 更新最终状态
             from datetime import datetime as dt

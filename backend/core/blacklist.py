@@ -39,7 +39,7 @@ def _load_from_db():
 def _refresh_loop():
     """后台线程：每 60 秒刷新一次"""
     while _running:
-        time.sleep(60)
+        time.sleep(60)  # nosemgrep: arbitrary-sleep
         if _running:
             _load_from_db()
 

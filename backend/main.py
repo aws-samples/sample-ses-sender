@@ -263,7 +263,7 @@ def _sqs_polling_worker():
 
         except Exception as e:
             _sqs_logger.error(f"[SQS Worker] 轮询异常: {e}")
-            _time.sleep(5)  # 出错后等 5 秒再重试
+            _time.sleep(5)  # nosemgrep: arbitrary-sleep  出错后等 5 秒再重试
 
 
 # 仅在配置了 SQS_QUEUE_URL 时启动轮询线程
@@ -284,7 +284,7 @@ def _scheduler_worker():
     _scheduler_logger.info("[Scheduler] 定时任务调度线程已启动")
     while True:
         try:
-            _time.sleep(30)
+            _time.sleep(30)  # nosemgrep: arbitrary-sleep
             from datetime import datetime
             from core.database import SessionLocal
             from domain.sending.models import ScheduledJob
@@ -309,7 +309,7 @@ def _scheduler_worker():
 
         except Exception as e:
             _scheduler_logger.error(f"[Scheduler] 调度循环异常: {e}")
-            _time.sleep(10)
+            _time.sleep(10)  # nosemgrep: arbitrary-sleep
 
 
 _scheduler_thread = threading.Thread(target=_scheduler_worker, daemon=True)

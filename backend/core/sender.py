@@ -74,7 +74,7 @@ class SlidingWindow:
         while time.monotonic() < deadline:
             if self.acquire():
                 return True
-            time.sleep(0.05)
+            time.sleep(0.05)  # nosemgrep: arbitrary-sleep
         return False
 
 
@@ -166,7 +166,7 @@ class SenderEngine:
             elif num_msg >= self.message_rate:
                 sleep_time = 1.0 - (now - last_reset)
                 if sleep_time > 0:
-                    time.sleep(sleep_time)
+                    time.sleep(sleep_time)  # nosemgrep: arbitrary-sleep
                 num_msg = 0
                 last_reset = time.monotonic()
 
@@ -277,7 +277,7 @@ class SenderEngine:
                 self._total_errors += 1
 
             if "Throttling" in err_str or "Rate exceeded" in err_str:
-                time.sleep(2)
+                time.sleep(2)  # nosemgrep: arbitrary-sleep
 
     def _replace_vars(self, template: str, task: SendTask) -> str:
         if not template:
@@ -331,7 +331,7 @@ class SenderEngine:
                 self._process_queued_jobs()
             except Exception as e:
                 logger.error(f"[Scanner] 异常: {e}")
-            time.sleep(5)
+            time.sleep(5)  # nosemgrep: arbitrary-sleep
 
     def _enqueue_pending_details(self, db, job) -> bool:
         """将 job 中 Pending 状态的 detail 构建为 SendTask 并入队。成功返回 True，队列满返回 False。"""

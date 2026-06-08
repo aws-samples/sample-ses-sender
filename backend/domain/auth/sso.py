@@ -222,7 +222,7 @@ def saml_login(db: Session = Depends(get_db)):
 async def saml_callback(request, db: Session = Depends(get_db)):
     """SAML ACS (Assertion Consumer Service) endpoint"""
     import base64
-    import xml.etree.ElementTree as ET
+    from defusedxml.ElementTree import fromstring
     from fastapi import Request
 
     form = await request.form()
@@ -232,7 +232,7 @@ async def saml_callback(request, db: Session = Depends(get_db)):
 
     try:
         xml_str = base64.b64decode(saml_response).decode()
-        root = ET.fromstring(xml_str)
+        root = fromstring(xml_str)
         ns = {"saml": "urn:oasis:names:tc:SAML:2.0:assertion"}
 
         email = None

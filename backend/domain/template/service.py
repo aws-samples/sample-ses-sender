@@ -405,6 +405,7 @@ def _load_images(image_urls: list, logger) -> list:
                 import urllib.request
                 import tempfile
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".img")
+                tmp.close()
                 urllib.request.urlretrieve(url, tmp.name)
                 filepath = tmp.name
             else:

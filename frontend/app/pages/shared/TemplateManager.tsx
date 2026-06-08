@@ -1,5 +1,6 @@
 "use client";
 import React, { useState, useEffect, useRef } from "react";
+import DOMPurify from "dompurify";
 import { API, authH, useAuth, useToast, useConfirm, Card, Btn, Input, Textarea, Modal } from "../../components/shared";
 import { useT } from "../../i18n";
 
@@ -62,10 +63,11 @@ export default function TemplateManager({apiPrefix}:{apiPrefix:string}) {
     if (!iframe) return;
     try {
       const doc = iframe.contentDocument;
-      if (doc?.body && doc.body.innerHTML !== f.html_body) {
+      const cleanHtml = DOMPurify.sanitize(f.html_body);
+      if (doc?.body && doc.body.innerHTML !== cleanHtml) {
         const sel = doc.getSelection();
         const hadFocus = doc.hasFocus();
-        doc.body.innerHTML = f.html_body;
+        doc.body.innerHTML = cleanHtml;
         if (hadFocus && sel) { try { sel.selectAllChildren(doc.body); sel.collapseToEnd(); } catch {} }
       }
     } catch {}
