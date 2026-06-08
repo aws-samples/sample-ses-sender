@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8
+    container_name: ses-sender-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-ses_sender_root_123}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-ses_sender}
+      - MYSQL_USER=${MYSQL_USER:-ses_sender}
+      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-ses_sender_123}
+    volumes:
+      - ./data/mysql:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  backend:
+    build: ./backend
+    container_name: ses-sender-backend
+    expose:
+      - "8000"
+    environment:
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - SES_CONFIGURATION_SET=${SES_CONFIGURATION_SET:-mytest123}
+      - SQS_QUEUE_URL=${SQS_QUEUE_URL:-}
+      - UNSUBSCRIBE_BASE_URL=${UNSUBSCRIBE_BASE_URL:-}
+      - BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID:-global.anthropic.claude-opus-4-6-v1}
+      - BEDROCK_REGION=${BEDROCK_REGION:-us-east-1}
+      - ENABLE_SENDER=${ENABLE_SENDER:-true}
+      - SENDER_CONCURRENCY=${SENDER_CONCURRENCY:-2}
+      - SENDER_MESSAGE_RATE=${SENDER_MESSAGE_RATE:-0}
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER:-ses_sender}:${MYSQL_PASSWORD:-ses_sender_123}@mysql:3306/${MYSQL_DATABASE:-ses_sender}
+    volumes:
+      - ./data/uploads:/app/uploads
+      - ./data/logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: ses-sender-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  mcp:
+    build: ./mcp-server
+    container_name: ses-sender-mcp
+    ports:
+      - "8808:8808"
+    environment:
+      - SES_SENDER_URL=http://backend:8000
+      - MCP_PORT=8808
+      - MCP_API_KEY=${MCP_API_KEY:-}
+    depends_on:
+      - backend
+    restart: unless-stopped

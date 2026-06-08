@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+boto3
+python-dotenv
+pydantic[email]
+sqlalchemy
+pymysql
+cryptography
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt==4.1.3
+python-multipart
+openpyxl
+alembic
+pytest
+pytest-mock
