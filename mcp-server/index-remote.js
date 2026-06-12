@@ -33,32 +33,67 @@ async function api(sessionId, method, path, body) {
 }
 
 const ACTIONS = {
+  // 认证与个人
   login:              { method: "POST", path: "/auth/login" },
+  me:                 { method: "GET",  path: "/auth/me" },
+  set_contact_email:  { method: "PUT",  path: "/user/contact-email" },
+  // 概览与配额
   dashboard:          { method: "GET",  path: "/user/dashboard" },
   quota:              { method: "GET",  path: "/user/daily-quota" },
+  ses_quota:          { method: "GET",  path: "/ses-quota" },
+  // 客群与联系人
   groups:             { method: "GET",  path: "/groups" },
   group_create:       { method: "POST", path: "/groups" },
+  group_update:       { method: "PUT",  path: "/groups/{group_id}" },
   group_delete:       { method: "DELETE",path:"/groups/{group_id}" },
   contacts:           { method: "GET",  path: "/groups/{group_id}/contacts" },
   contact_add:        { method: "POST", path: "/contacts" },
   contact_delete:     { method: "DELETE",path:"/contacts/{contact_id}" },
+  // 模版 CRUD
   templates:          { method: "GET",  path: "/user/templates" },
+  template_create:    { method: "POST", path: "/user/templates" },
+  template_update:    { method: "PUT",  path: "/user/templates/{template_id}" },
+  template_delete:    { method: "DELETE",path:"/user/templates/{template_id}" },
+  // AI 模版能力
+  ai_optimize:        { method: "POST", path: "/ai/optimize-template" },
+  ai_evaluate:        { method: "POST", path: "/ai/evaluate-template" },
+  ai_dimension_fix:   { method: "POST", path: "/ai/dimension-fix" },
+  ai_models:          { method: "GET",  path: "/ai-models/available" },
+  // 发送
   send:               { method: "POST", path: "/send-bulk" },
   progress:           { method: "GET",  path: "/sending-jobs/{batch_id}/progress" },
   history:            { method: "GET",  path: "/sending-jobs" },
   metrics:            { method: "GET",  path: "/sending-jobs/{batch_id}/metrics" },
+  batch_details:      { method: "GET",  path: "/sending-jobs/{batch_id}/details" },
   email_details:      { method: "GET",  path: "/email-details" },
+  // 定时任务
   scheduled_list:     { method: "GET",  path: "/scheduled-jobs" },
   scheduled_create:   { method: "POST", path: "/scheduled-jobs" },
   scheduled_toggle:   { method: "PUT",  path: "/scheduled-jobs/{job_id}" },
   scheduled_delete:   { method: "DELETE",path:"/scheduled-jobs/{job_id}" },
+  // 退订管理
   unsubscribes:       { method: "GET",  path: "/unsubscribe-list" },
-  group_create:       { method: "POST", path: "/groups" },
-  group_delete:       { method: "DELETE",path:"/groups/{group_id}" },
+  unsubscribe_delete: { method: "DELETE",path:"/unsubscribe-list/{record_id}" },
+  // 发送实体 / 域名验证（管理员）
+  identities:         { method: "GET",  path: "/admin/identities" },
+  identity_reputation:{ method: "GET",  path: "/admin/identities/reputation" },
+  verify_email:       { method: "POST", path: "/admin/identities/verify-email" },
+  verify_domain:      { method: "POST", path: "/admin/identities/verify-domain" },
+  // 测试邮件（管理员）
+  test_email:         { method: "POST", path: "/admin/test-email" },
+  // 邮箱黑名单（管理员）
+  blacklist:          { method: "GET",  path: "/admin/blacklist" },
+  blacklist_add:      { method: "POST", path: "/admin/blacklist" },
+  blacklist_delete:   { method: "DELETE",path:"/admin/blacklist/{item_id}" },
+  blacklist_count:    { method: "GET",  path: "/admin/blacklist/count" },
+  // 用户管理（管理员）
   users_list:         { method: "GET",  path: "/admin/users" },
   user_create:        { method: "POST", path: "/admin/users" },
   user_update:        { method: "PUT",  path: "/admin/users/{user_id}" },
   users_quotas:       { method: "GET",  path: "/admin/users/quotas" },
+  // 管理员统计
+  admin_stats:        { method: "GET",  path: "/admin/sending-stats" },
+  admin_jobs:         { method: "GET",  path: "/admin/sending-jobs" },
 };
 
 function registerTools(server) {

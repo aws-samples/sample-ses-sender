@@ -342,8 +342,192 @@ server.tool(
     const d = await api(`/unsubscribe-list?${params}`);
     if (!d.items?.length) return { content: [{ type: "text", text: "暂无退订记录" }] };
     let text = `退订列表（第 ${d.page}/${d.total_pages} 页，共 ${d.total} 条）\n${"─".repeat(40)}\n`;
-    d.items.forEach(r => { text += `${r.email}（来自 ${r.source_email}）| 原因: ${r.reason} | ${r.unsubscribed_at ? new Date(r.unsubscribed_at).toLocaleString() : ""}\n`; });
+    d.items.forEach(r => { text += `#${r.id} ${r.email}（来自 ${r.source_email}）| 原因: ${r.reason} | ${r.unsubscribed_at ? new Date(r.unsubscribed_at).toLocaleString() : ""}\n`; });
     return { content: [{ type: "text", text }] };
+  }
+);
+
+server.tool(
+  "delete_unsubscribe",
+  "删除退订记录（恢复对该邮箱的发送）",
+  { record_id: z.number().describe("退订记录 ID") },
+  async ({ record_id }) => {
+    await api(`/unsubscribe-list/${record_id}`, { method: "DELETE" });
+    return { content: [{ type: "text", text: `退订记录 #${record_id} 已删除，恢复发送` }] };
+  }
+);
+
+// ==================== 模版 CRUD ====================
+
+server.tool(
+  "create_template",
+  "创建邮件模版。支持 {{name}} {{email}} {{unsubscribe_url}} 及自定义属性占位符",
+  { name: z.string().describe("模版名称"), subject: z.string().describe("邮件主题"), html_body: z.string().describe("HTML 正文") },
+  async ({ name, subject, html_body }) => {
+    const d = await api("/user/templates", { method: "POST", body: JSON.stringify({ name, subject, html_body }) });
+    return { content: [{ type: "text", text: d.message || "模版创建成功" }] };
+  }
+);
+
+server.tool(
+  "update_template",
+  "更新邮件模版的主题或正文",
+  { template_id: z.number().describe("模版 ID"), subject: z.string().optional().describe("新主题"), html_body: z.string().optional().describe("新 HTML 正文") },
+  async ({ template_id, subject, html_body }) => {
+    const body = {};
+    if (subject !== undefined) body.subject = subject;
+    if (html_body !== undefined) body.html_body = html_body;
+    const d = await api(`/user/templates/${template_id}`, { method: "PUT", body: JSON.stringify(body) });
+    return { content: [{ type: "text", text: d.message || "模版已更新" }] };
+  }
+);
+
+server.tool(
+  "delete_template",
+  "删除邮件模版",
+  { template_id: z.number().describe("模版 ID") },
+  async ({ template_id }) => {
+    const d = await api(`/user/templates/${template_id}`, { method: "DELETE" });
+    return { content: [{ type: "text", text: d.message || "模版已删除" }] };
+  }
+);
+
+// ==================== AI 模版能力 ====================
+
+server.tool(
+  "ai_optimize_template",
+  "用 AI 优化邮件模版（可送达性、打开率、点击率、移动端、合规、HTML质量）。返回优化后的主题与 HTML",
+  {
+    subject: z.string().describe("当前主题"),
+    html_body: z.string().describe("当前 HTML 正文"),
+    user_feedback: z.string().optional().describe("额外优化要求（可选，用于迭代精修）"),
+    model_id: z.string().optional().describe("指定 AI 模型 ID（可选）"),
+  },
+  async ({ subject, html_body, user_feedback, model_id }) => {
+    const body = { subject, html_body };
+    if (user_feedback) body.user_feedback = user_feedback;
+    if (model_id) body.model_id = model_id;
+    const d = await api("/ai/optimize-template", { method: "POST", body: JSON.stringify(body) });
+    return { content: [{ type: "text", text: fmt(d) }] };
+  }
+);
+
+server.tool(
+  "ai_evaluate_template",
+  "用 AI 对模版做 8 维可送达性评测（0-100分），返回各维度得分、问题与建议",
+  {
+    subject: z.string().describe("主题"),
+    html_body: z.string().describe("HTML 正文"),
+    model_ids: z.array(z.string()).optional().describe("指定多个模型 ID 做对比评测（可选）"),
+  },
+  async ({ subject, html_body, model_ids }) => {
+    const body = { subject, html_body };
+    if (model_ids) body.model_ids = model_ids;
+    const d = await api("/ai/evaluate-template", { method: "POST", body: JSON.stringify(body) });
+    return { content: [{ type: "text", text: fmt(d) }] };
+  }
+);
+
+server.tool(
+  "ai_dimension_fix",
+  "针对模版某个评测维度的问题，让 AI 生成修复方案与代码片段",
+  {
+    subject: z.string().describe("主题"),
+    html_body: z.string().describe("HTML 正文"),
+    dimension: z.string().describe("维度名称，如 移动端适配 / HTML质量"),
+    issues: z.array(z.string()).describe("该维度检测到的问题列表"),
+    model_id: z.string().optional().describe("指定 AI 模型 ID（可选）"),
+  },
+  async ({ subject, html_body, dimension, issues, model_id }) => {
+    const body = { subject, html_body, dimension, issues };
+    if (model_id) body.model_id = model_id;
+    const d = await api("/ai/dimension-fix", { method: "POST", body: JSON.stringify(body) });
+    return { content: [{ type: "text", text: fmt(d) }] };
+  }
+);
+
+// ==================== 邮箱黑名单（管理员） ====================
+
+server.tool(
+  "list_blacklist",
+  "查看邮箱黑名单（管理员）",
+  { search: z.string().optional().describe("搜索邮箱"), page: z.number().optional().describe("页码") },
+  async ({ search, page }) => {
+    const params = new URLSearchParams();
+    if (search) params.set("search", search);
+    params.set("page", String(page || 1));
+    const d = await api(`/admin/blacklist?${params}`);
+    if (!d.items?.length) return { content: [{ type: "text", text: "黑名单为空" }] };
+    let text = `黑名单（共 ${d.total} 个）\n${"─".repeat(40)}\n`;
+    d.items.forEach(b => { text += `#${b.id} ${b.email}${b.reason ? " | " + b.reason : ""}\n`; });
+    return { content: [{ type: "text", text }] };
+  }
+);
+
+server.tool(
+  "add_blacklist",
+  "添加邮箱到黑名单（管理员）。黑名单邮箱在所有用户发送时被拒绝",
+  { email: z.string().describe("邮箱地址"), reason: z.string().optional().describe("原因") },
+  async ({ email, reason }) => {
+    const d = await api("/admin/blacklist", { method: "POST", body: JSON.stringify({ email, reason: reason || "" }) });
+    return { content: [{ type: "text", text: d.message || `已添加 ${email} 到黑名单` }] };
+  }
+);
+
+server.tool(
+  "delete_blacklist",
+  "从黑名单移除邮箱（管理员）",
+  { item_id: z.number().describe("黑名单记录 ID") },
+  async ({ item_id }) => {
+    const d = await api(`/admin/blacklist/${item_id}`, { method: "DELETE" });
+    return { content: [{ type: "text", text: d.message || `黑名单 #${item_id} 已删除` }] };
+  }
+);
+
+// ==================== 发送实体 / 域名验证（管理员） ====================
+
+server.tool(
+  "list_identities",
+  "查看 SES 发送实体（已验证的邮箱/域名）列表（管理员）",
+  {},
+  async () => {
+    const d = await api("/admin/identities");
+    return { content: [{ type: "text", text: fmt(d) }] };
+  }
+);
+
+server.tool(
+  "verify_email_identity",
+  "验证一个发件邮箱（管理员）。SES 会向该邮箱发送验证邮件",
+  { email: z.string().describe("要验证的邮箱地址") },
+  async ({ email }) => {
+    const d = await api("/admin/identities/verify-email", { method: "POST", body: JSON.stringify({ email }) });
+    return { content: [{ type: "text", text: fmt(d) }] };
+  }
+);
+
+server.tool(
+  "verify_domain_identity",
+  "验证一个发件域名（管理员）。返回需要配置的 DNS 记录",
+  { domain: z.string().describe("要验证的域名") },
+  async ({ domain }) => {
+    const d = await api("/admin/identities/verify-domain", { method: "POST", body: JSON.stringify({ domain }) });
+    return { content: [{ type: "text", text: fmt(d) }] };
+  }
+);
+
+// ==================== 测试邮件（管理员） ====================
+
+server.tool(
+  "send_test_email",
+  "发送一封测试邮件（管理员），用于验证配置",
+  { to_email: z.string().describe("收件邮箱"), subject: z.string().optional().describe("主题"), body: z.string().optional().describe("正文 HTML") },
+  async ({ to_email, subject, body }) => {
+    const payload = { to_email };
+    if (subject) payload.subject = subject;
+    if (body) payload.body = body;
+    const d = await api("/admin/test-email", { method: "POST", body: JSON.stringify(payload) });
+    return { content: [{ type: "text", text: fmt(d) }] };
   }
 );
 
