@@ -477,8 +477,18 @@ class SenderEngine:
 
             jobs = db.query(SendingJob).filter(SendingJob.status == "queued").limit(5).all()
             for job in jobs:
-                job.status = "sending"
+                # 原子抢占：只有把 status 从 queued 改为 sending 成功（影响行数=1）的实例才处理该 job，
+                # 防止多个 Writer 实例同时拾取同一 job 导致重复发送
+                claimed = db.query(SendingJob).filter(
+                    SendingJob.id == job.id,
+                    SendingJob.status == "queued",
+                ).update({"status": "sending"}, synchronize_session=False)
                 db.commit()
+                if claimed == 0:
+                    # 已被其他实例抢走
+                    continue
+
+                db.refresh(job)
 
                 pending_count = db.query(SendingJobDetail).filter(
                     SendingJobDetail.batch_id == job.batch_id,
