@@ -12,6 +12,7 @@ import * as cloudfront from "aws-cdk-lib/aws-cloudfront";
 import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as ses from "aws-cdk-lib/aws-ses";
+import * as ecrAssets from "aws-cdk-lib/aws-ecr-assets";
 import * as cr from "aws-cdk-lib/custom-resources";
 import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import * as path from "path";
@@ -46,22 +47,39 @@ export class SesSenderStack extends cdk.Stack {
     const account = cdk.Stack.of(this).account;
     const DB_NAME = "ses_sender";
     const DB_USER = "ses_sender";
+    // 镜像与 Fargate 运行时统一钉到 ARM64（Graviton，成本更低，与构建主机架构解耦）
+    const cpuArchitecture = ecs.CpuArchitecture.ARM64;
+    const imagePlatform = ecrAssets.Platform.LINUX_ARM64;
 
     // ============================================================
-    // 1. 网络层 — VPC（公有子网放 ALB/NAT，私有子网放 ECS/Aurora）
+    // 1. 网络层 — 新建 VPC，或复用已有 VPC（-c vpcId=vpc-xxx，适用于 VPC 配额已满）
     // ============================================================
-    const vpc = new ec2.Vpc(this, "Vpc", {
-      maxAzs: 2,
-      natGateways: props.natGateways,
-      subnetConfiguration: [
-        { name: "public", subnetType: ec2.SubnetType.PUBLIC, cidrMask: 24 },
-        {
-          name: "private",
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
-          cidrMask: 24,
-        },
-      ],
-    });
+    const existingVpcId = this.node.tryGetContext("vpcId") as string | undefined;
+    let vpc: ec2.IVpc;
+    let workloadSubnets: ec2.SubnetSelection;
+    let assignPublicIp: boolean;
+
+    if (existingVpcId) {
+      // 复用已有 VPC：工作负载放公有子网（Fargate 分配公网 IP 出网，免 NAT）
+      vpc = ec2.Vpc.fromLookup(this, "Vpc", { vpcId: existingVpcId });
+      workloadSubnets = { subnetType: ec2.SubnetType.PUBLIC };
+      assignPublicIp = true;
+    } else {
+      vpc = new ec2.Vpc(this, "Vpc", {
+        maxAzs: 2,
+        natGateways: props.natGateways,
+        subnetConfiguration: [
+          { name: "public", subnetType: ec2.SubnetType.PUBLIC, cidrMask: 24 },
+          {
+            name: "private",
+            subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+            cidrMask: 24,
+          },
+        ],
+      });
+      workloadSubnets = { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS };
+      assignPublicIp = false;
+    }
 
     // ============================================================
     // 2. 密钥层 — JWT SECRET_KEY + 数据库凭据（Secrets Manager）
@@ -92,12 +110,12 @@ export class SesSenderStack extends cdk.Stack {
     // ============================================================
     const dbCluster = new rds.DatabaseCluster(this, "Aurora", {
       engine: rds.DatabaseClusterEngine.auroraMysql({
-        version: rds.AuroraMysqlEngineVersion.VER_3_07_1,
+        version: rds.AuroraMysqlEngineVersion.VER_3_08_2,
       }),
       credentials: rds.Credentials.fromSecret(dbSecret),
       defaultDatabaseName: DB_NAME,
       vpc,
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      vpcSubnets: workloadSubnets,
       serverlessV2MinCapacity: 0.5,
       serverlessV2MaxCapacity: 4,
       writer: rds.ClusterInstance.serverlessV2("writer"),
@@ -237,12 +255,51 @@ export class SesSenderStack extends cdk.Stack {
       removalPolicy: RemovalPolicy.DESTROY,
     });
 
-    // ---- ALB（公网入口）与 CloudFront 先建好，便于拿到退订公网 URL ----
+    // 统一的应用层安全组（3 个服务共用，组内互通）。
+    // 避免跨服务 SG 交叉引用，从而能安全地给客户端服务加 backend 依赖。
+    const ecsSg = new ec2.SecurityGroup(this, "EcsSg", {
+      vpc,
+      description: "SES Sender app tier (frontend/backend/mcp)",
+      allowAllOutbound: true,
+    });
+    ecsSg.addIngressRule(ecsSg, ec2.Port.allTraffic(), "intra app tier");
+
+    // ---- ALB（公网入口）与 CloudFront。ALB 仅允许 CloudFront 访问，不对公网裸露 ----
     const alb = new elbv2.ApplicationLoadBalancer(this, "Alb", {
       vpc,
       internetFacing: true,
     });
-    const listener = alb.addListener("Http", { port: 80, open: true });
+    // open:false 不加 0.0.0.0/0；仅放行 CloudFront 源站 IP（AWS 托管前缀列表）。
+    const listener = alb.addListener("Http", { port: 80, open: false });
+
+    // 查找 CloudFront origin-facing 托管前缀列表 ID（各区域不同）
+    const cfPrefixList = new cr.AwsCustomResource(this, "CfPrefixList", {
+      onUpdate: {
+        service: "EC2",
+        action: "describeManagedPrefixLists",
+        parameters: {
+          Filters: [
+            {
+              Name: "prefix-list-name",
+              Values: ["com.amazonaws.global.cloudfront.origin-facing"],
+            },
+          ],
+        },
+        physicalResourceId: cr.PhysicalResourceId.of("cf-origin-prefix-list"),
+      },
+      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
+        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
+      }),
+      installLatestAwsSdk: false,
+    });
+    const cfPrefixListId = cfPrefixList.getResponseField(
+      "PrefixLists.0.PrefixListId"
+    );
+    alb.connections.allowFrom(
+      ec2.Peer.prefixList(cfPrefixListId),
+      ec2.Port.tcp(80),
+      "CloudFront origin-facing only"
+    );
 
     const distribution = new cloudfront.Distribution(this, "Cdn", {
       comment: "SES Sender frontend",
@@ -282,6 +339,8 @@ export class SesSenderStack extends cdk.Stack {
           "sesv2:UpdateEmailTemplate",
           "sesv2:DeleteEmailTemplate",
           "sesv2:GetAccount",
+          "ses:GetSendQuota",
+          "ses:GetSendStatistics",
           "cloudwatch:GetMetricStatistics",
           "cloudwatch:ListMetrics",
           "bedrock:InvokeModel",
@@ -297,9 +356,10 @@ export class SesSenderStack extends cdk.Stack {
       cpu: 512,
       memoryLimitMiB: 1024,
       taskRole: backendTaskRole,
+      runtimePlatform: { cpuArchitecture },
     });
     const backendContainer = backendTask.addContainer("backend", {
-      image: ecs.ContainerImage.fromAsset(path.join(__dirname, "..", "..", "backend")),
+      image: ecs.ContainerImage.fromAsset(path.join(__dirname, "..", "..", "backend"), { platform: imagePlatform }),
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "backend", logGroup }),
       environment: {
         AWS_REGION: region,
@@ -329,22 +389,25 @@ export class SesSenderStack extends cdk.Stack {
       desiredCount: 1,
       minHealthyPercent: 100,
       circuitBreaker: { rollback: true },
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      assignPublicIp,
+      vpcSubnets: workloadSubnets,
+      securityGroups: [ecsSg],
       serviceConnectConfiguration: {
         services: [
           { portMappingName: "backend", dnsName: "backend", port: 8000 },
         ],
       },
     });
-    dbCluster.connections.allowDefaultPortFrom(backendService, "backend->aurora");
+    dbCluster.connections.allowDefaultPortFrom(ecsSg, "app to aurora");
 
     // ---- Frontend Task Definition + Service（接 ALB，反代 backend）----
     const frontendTask = new ecs.FargateTaskDefinition(this, "FrontendTask", {
       cpu: 256,
       memoryLimitMiB: 512,
+      runtimePlatform: { cpuArchitecture },
     });
     const frontendContainer = frontendTask.addContainer("frontend", {
-      image: ecs.ContainerImage.fromAsset(path.join(__dirname, "..", "..", "frontend")),
+      image: ecs.ContainerImage.fromAsset(path.join(__dirname, "..", "..", "frontend"), { platform: imagePlatform }),
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "frontend", logGroup }),
       environment: { BACKEND_URL: "http://backend:8000" },
     });
@@ -356,7 +419,9 @@ export class SesSenderStack extends cdk.Stack {
       desiredCount: 1,
       minHealthyPercent: 100,
       circuitBreaker: { rollback: true },
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      assignPublicIp,
+      vpcSubnets: workloadSubnets,
+      securityGroups: [ecsSg],
       serviceConnectConfiguration: {}, // 作为客户端解析 backend
     });
 
@@ -370,11 +435,6 @@ export class SesSenderStack extends cdk.Stack {
         interval: Duration.seconds(30),
       },
     });
-    backendService.connections.allowFrom(
-      frontendService,
-      ec2.Port.tcp(8000),
-      "frontend->backend"
-    );
 
     // ---- MCP Server Task Definition + Service（AI agent 接入）----
     const mcpApiKey = new secretsmanager.Secret(this, "McpApiKey", {
@@ -389,9 +449,10 @@ export class SesSenderStack extends cdk.Stack {
     const mcpTask = new ecs.FargateTaskDefinition(this, "McpTask", {
       cpu: 256,
       memoryLimitMiB: 512,
+      runtimePlatform: { cpuArchitecture },
     });
     const mcpContainer = mcpTask.addContainer("mcp", {
-      image: ecs.ContainerImage.fromAsset(path.join(__dirname, "..", "..", "mcp-server")),
+      image: ecs.ContainerImage.fromAsset(path.join(__dirname, "..", "..", "mcp-server"), { platform: imagePlatform }),
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "mcp", logGroup }),
       environment: {
         SES_SENDER_URL: "http://backend:8000",
@@ -409,52 +470,61 @@ export class SesSenderStack extends cdk.Stack {
       desiredCount: 1,
       minHealthyPercent: 100,
       circuitBreaker: { rollback: true },
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      assignPublicIp,
+      vpcSubnets: workloadSubnets,
+      securityGroups: [ecsSg],
       serviceConnectConfiguration: {
         services: [{ portMappingName: "mcp", dnsName: "mcp", port: 8808 }],
       },
     });
-    backendService.connections.allowFrom(
-      mcpService,
-      ec2.Port.tcp(8000),
-      "mcp->backend"
-    );
+
+    // Service Connect 启动时序：客户端服务（frontend/mcp）必须在 backend 的 SC 别名
+    // 注册之后再启动，否则 Envoy 拿不到 "backend" 别名 → ENOTFOUND。
+    // （三个服务共用 ecsSg，无跨 SG 交叉引用，故不会成环）
+    frontendService.node.addDependency(backendService);
+    mcpService.node.addDependency(backendService);
 
     // ============================================================
     // 7. 输出
     // ============================================================
     new cdk.CfnOutput(this, "AppUrl", {
       value: publicUrl,
-      description: "应用访问地址（CloudFront）。默认管理员 admin / admin123",
+      description: "Application URL (CloudFront). Default admin login: admin / admin123",
     });
     new cdk.CfnOutput(this, "AlbDnsName", {
       value: alb.loadBalancerDnsName,
-      description: "ALB 域名（CloudFront 回源）",
+      description: "ALB DNS name (CloudFront origin)",
     });
     new cdk.CfnOutput(this, "DbEndpoint", {
       value: dbCluster.clusterEndpoint.hostname,
-      description: "Aurora MySQL 写入端点",
+      description: "Aurora MySQL writer endpoint",
     });
     new cdk.CfnOutput(this, "SqsQueueUrl", {
       value: eventQueue.queueUrl,
-      description: "SES 事件追踪 SQS 队列",
+      description: "SQS queue URL for SES event tracking",
     });
     new cdk.CfnOutput(this, "ConfigurationSetName", {
       value: props.configurationSetName,
-      description: "SES Configuration Set（VDM 追踪）",
+      description: "SES Configuration Set (VDM tracking)",
     });
     new cdk.CfnOutput(this, "JwtSecretArn", {
       value: jwtSecret.secretArn,
-      description: "JWT SECRET_KEY 密钥 ARN",
+      description: "Secrets Manager ARN of the JWT SECRET_KEY",
     });
     new cdk.CfnOutput(this, "McpApiKeyArn", {
       value: mcpApiKey.secretArn,
-      description: "MCP Server API Key 密钥 ARN",
+      description: "Secrets Manager ARN of the MCP Server API key",
     });
     new cdk.CfnOutput(this, "NoteSesSandbox", {
       value:
-        "SES 默认沙箱模式，需在控制台申请移出；并在应用内验证发件邮箱/域名。",
-      description: "部署后提醒",
+        "SES starts in sandbox mode: request production access in the console, then verify sender email/domain in the app.",
+      description: "Post-deploy note",
+    });
+    new cdk.CfnOutput(this, "NoteSecurity", {
+      value: assignPublicIp
+        ? "Reused-VPC mode: ECS/Aurora run in PUBLIC subnets (no NAT). Aurora is not publicly accessible (SG-locked), but for production prefer the default new-VPC mode (private subnets + NAT). ALB only accepts CloudFront origin-facing traffic."
+        : "New-VPC mode: ECS/Aurora in private subnets behind NAT. ALB only accepts CloudFront origin-facing traffic; backend/Aurora are not exposed to the internet.",
+      description: "Security posture",
     });
   }
 }
