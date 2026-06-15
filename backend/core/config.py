@@ -9,7 +9,17 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
 
 # Database
-DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://ses_sender:ses_sender_123@localhost:3306/ses_sender")
+# 优先使用拆分的 DB_* 变量（云原生部署：密码经 Secrets Manager 注入，避免明文 DATABASE_URL）。
+# 未设置 DB_HOST 时回退到完整的 DATABASE_URL（本地 docker-compose 兼容）。
+_DB_HOST = os.getenv("DB_HOST")
+if _DB_HOST:
+    _DB_USER = os.getenv("DB_USER", "ses_sender")
+    _DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+    _DB_PORT = os.getenv("DB_PORT", "3306")
+    _DB_NAME = os.getenv("DB_NAME", "ses_sender")
+    DATABASE_URL = f"mysql+pymysql://{_DB_USER}:{_DB_PASSWORD}@{_DB_HOST}:{_DB_PORT}/{_DB_NAME}"
+else:
+    DATABASE_URL = os.getenv("DATABASE_URL", "mysql+pymysql://ses_sender:ses_sender_123@localhost:3306/ses_sender")
 
 # AWS
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")

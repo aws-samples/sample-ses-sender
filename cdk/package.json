@@ -1,0 +1,28 @@
+{
+  "name": "ses-sender-cdk",
+  "version": "1.0.0",
+  "description": "One-click AWS CDK deployment for SES Sender (CloudFront + ALB + ECS Fargate + Aurora MySQL + SES/SNS/SQS + Bedrock)",
+  "bin": {
+    "ses-sender-cdk": "bin/ses-sender.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy --require-approval never",
+    "destroy": "cdk destroy",
+    "diff": "cdk diff"
+  },
+  "author": "CrypticDriver <nerdtsai@proton.me>",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "aws-cdk": "^2.160.0",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.5.4"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.160.0",
+    "constructs": "^10.3.0"
+  }
+}

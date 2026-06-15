@@ -91,6 +91,8 @@ ses-sender/
 
 ## 快速开始
 
+> ☁️ **想要 AWS 生产级一键部署？** 见 [`cdk/`](cdk/README.md) —— 用 AWS CDK 一条命令拉起 CloudFront + ALB + ECS Fargate + Aurora MySQL + SES/SNS/SQS 全套基础设施。以下为本地 docker-compose 方式。
+
 ### 1. 环境准备
 
 - Docker & Docker Compose
