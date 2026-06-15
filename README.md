@@ -59,6 +59,10 @@ ses-sender/
 ├── .env.example
 ├── setup-ses-events.sh            # SNS+SQS 一键配置脚本
 │
+├── cdk/                           # AWS CDK 一键部署（生产环境）
+│   ├── bin/ses-sender.ts          #   CDK 应用入口
+│   └── lib/ses-sender-stack.ts    #   基础设施栈（VPC/ECS/Aurora/SES/CloudFront）
+│
 ├── backend/
 │   ├── main.py                    # 应用入口，Alembic 迁移 + SQS 轮询 + 定时调度器 + 路由注册
 │   ├── alembic/                   # 数据库迁移
@@ -91,7 +95,7 @@ ses-sender/
 
 ## 快速开始
 
-> ☁️ **想要 AWS 生产级一键部署？** 见 [`cdk/`](cdk/README.md) —— 用 AWS CDK 一条命令拉起 CloudFront + ALB + ECS Fargate + Aurora MySQL + SES/SNS/SQS 全套基础设施。以下为本地 docker-compose 方式。
+> 本项目提供两种部署方式：本地 **docker-compose**（见下）与 **AWS CDK 一键生产部署**（见 [AWS CDK 部署](#aws-cdk-部署生产环境)）。
 
 ### 1. 环境准备
 
@@ -167,6 +171,66 @@ docker-compose up -d --build
 ```
 
 > 首次登录后建议立即修改密码。
+
+## AWS CDK 部署（生产环境）
+
+除本地 docker-compose 外，本项目提供完整的 [AWS CDK](https://docs.aws.amazon.com/cdk/) 部署方案，一条命令在 AWS 上拉起全套托管基础设施，无需手动创建 VPC、数据库或 SES 事件链路。详见 [`cdk/README.md`](cdk/README.md)。
+
+### 部署后创建的资源
+
+| 组件 | 说明 |
+|------|------|
+| VPC | 2 AZ，公有子网（ALB/NAT）+ 私有子网（ECS/Aurora） |
+| CloudFront | 公网入口 + HTTPS，回源 ALB |
+| ALB | 仅接受 CloudFront 源站流量，不对公网裸露 |
+| ECS Fargate | `frontend` / `backend` / `mcp` 三服务，经 Service Connect 互通 |
+| Aurora MySQL | Serverless v2，凭据存 Secrets Manager |
+| SES | Configuration Set + VDM + CloudWatch / SNS 事件目的地 |
+| 事件链路 | SES → SNS → SQS（后端长轮询） |
+| 密钥 | JWT / 数据库 / MCP 密钥由 Secrets Manager 生成注入，全程 IAM Role 无 AK/SK |
+
+容器镜像由 CDK 使用 `backend/` `frontend/` `mcp-server/` 的 Dockerfile 本地构建并推送至 ECR（需本机有 Docker）。
+
+### 前置要求
+
+- Node.js ≥ 18、Docker、AWS CLI（已配置凭据）
+- 目标区域已可用 SES（默认 `us-east-1`）
+
+### 部署
+
+```bash
+cd cdk
+npm install
+
+# 首次在该账号/区域使用 CDK 需先 bootstrap（只需一次）
+npx cdk bootstrap
+
+# 一键部署（自动构建镜像 + 创建全部资源）
+npm run deploy
+```
+
+部署完成后，输出中的 `AppUrl` 即访问地址（CloudFront）。默认管理员 `admin / admin123`，首次登录请立即修改。
+
+### 常用参数
+
+```bash
+# 指定区域 / 账户
+npx cdk deploy -c region=ap-northeast-1 -c account=123456789012
+
+# VPC 配额已满时复用已有 VPC
+npx cdk deploy -c vpcId=vpc-xxxxxxxx
+
+# 高可用：多 AZ NAT
+npx cdk deploy -c natGateways=2
+```
+
+### 销毁
+
+```bash
+cd cdk && npm run destroy
+```
+
+> Aurora 默认按快照策略保留快照；CloudFront 分发删除约需 15 分钟。
 
 ## 配置 VDM 送达率追踪
 

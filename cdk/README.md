@@ -93,7 +93,7 @@ npm run destroy    # 销毁全部资源（Aurora 默认保留快照）
 
 ## 安全说明
 
-- **ALB 不对公网裸奔**：ALB 安全组只放行 AWS 托管的 CloudFront origin-facing 前缀列表，外部无法绕过 CloudFront 直连 ALB。
+- **ALB 不直接暴露到公网**：ALB 安全组只放行 AWS 托管的 CloudFront origin-facing 前缀列表，外部无法绕过 CloudFront 直连 ALB。
 - **默认（新建 VPC）模式**：ECS 容器与 Aurora 都在**私有子网**，经 NAT 出网，不暴露公网；Aurora 仅允许应用层安全组访问。
 - **复用 VPC 模式（`-c vpcId=`）**：为应对 VPC 配额限制，工作负载放在**公有子网**并分配公网 IP（省 NAT）。Aurora 仍非公开访问（安全组锁定），但生产环境建议用默认新建 VPC 模式。
 - **密钥**：JWT / DB / MCP 密钥均由 Secrets Manager 生成注入，不落明文；容器全程用 IAM Role，无 AK/SK。
