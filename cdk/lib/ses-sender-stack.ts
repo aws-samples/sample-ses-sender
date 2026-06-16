@@ -47,9 +47,16 @@ export class SesSenderStack extends cdk.Stack {
     const account = cdk.Stack.of(this).account;
     const DB_NAME = "ses_sender";
     const DB_USER = "ses_sender";
-    // 镜像与 Fargate 运行时统一钉到 ARM64（Graviton，成本更低，与构建主机架构解耦）
-    const cpuArchitecture = ecs.CpuArchitecture.ARM64;
-    const imagePlatform = ecrAssets.Platform.LINUX_ARM64;
+    // 镜像与 Fargate 运行时架构。默认 X86_64（与常见 x86 构建主机一致，免 QEMU 跨架构模拟）。
+    // 如需 Graviton(ARM64) 降本，用 -c arch=arm64（要求构建主机为 ARM 或已装 QEMU/buildx）。
+    const archCtx = (this.node.tryGetContext("arch") as string | undefined) || "x86_64";
+    const isArm = archCtx.toLowerCase() === "arm64";
+    const cpuArchitecture = isArm
+      ? ecs.CpuArchitecture.ARM64
+      : ecs.CpuArchitecture.X86_64;
+    const imagePlatform = isArm
+      ? ecrAssets.Platform.LINUX_ARM64
+      : ecrAssets.Platform.LINUX_AMD64;
 
     // ============================================================
     // 1. 网络层 — 新建 VPC，或复用已有 VPC（-c vpcId=vpc-xxx，适用于 VPC 配额已满）
@@ -106,19 +113,35 @@ export class SesSenderStack extends cdk.Stack {
     });
 
     // ============================================================
-    // 3. 数据库层 — Aurora MySQL Serverless v2
+    // 3. 数据库层 — Aurora MySQL 3.10（t4g.xlarge 实例 + 自定义参数组）
     // ============================================================
+    const auroraEngine = rds.DatabaseClusterEngine.auroraMysql({
+      version: rds.AuroraMysqlEngineVersion.VER_3_10_4,
+    });
+
+    // 自定义集群参数组
+    const dbParameterGroup = new rds.ParameterGroup(this, "AuroraParams", {
+      engine: auroraEngine,
+      description: "SES Sender custom Aurora MySQL cluster parameter group",
+      parameters: {
+        character_set_server: "utf8mb4",
+        collation_server: "utf8mb4_unicode_ci",
+      },
+    });
+
     const dbCluster = new rds.DatabaseCluster(this, "Aurora", {
-      engine: rds.DatabaseClusterEngine.auroraMysql({
-        version: rds.AuroraMysqlEngineVersion.VER_3_08_2,
-      }),
+      engine: auroraEngine,
       credentials: rds.Credentials.fromSecret(dbSecret),
       defaultDatabaseName: DB_NAME,
       vpc,
       vpcSubnets: workloadSubnets,
-      serverlessV2MinCapacity: 0.5,
-      serverlessV2MaxCapacity: 4,
-      writer: rds.ClusterInstance.serverlessV2("writer"),
+      parameterGroup: dbParameterGroup,
+      writer: rds.ClusterInstance.provisioned("writer", {
+        instanceType: ec2.InstanceType.of(
+          ec2.InstanceClass.MEMORY8_GRAVITON,
+          ec2.InstanceSize.LARGE
+        ),
+      }),
       removalPolicy: RemovalPolicy.SNAPSHOT,
       storageEncrypted: true,
     });
@@ -331,6 +354,12 @@ export class SesSenderStack extends cdk.Stack {
           "ses:CreateTemplate",
           "ses:UpdateTemplate",
           "ses:DeleteTemplate",
+          "ses:GetTemplate",
+          "ses:CreateEmailTemplate",
+          "ses:UpdateEmailTemplate",
+          "ses:DeleteEmailTemplate",
+          "ses:GetEmailTemplate",
+          "ses:ListEmailTemplates",
           "ses:SendEmail",
           "ses:SendBulkTemplatedEmail",
           "sesv2:SendEmail",
@@ -338,6 +367,8 @@ export class SesSenderStack extends cdk.Stack {
           "sesv2:CreateEmailTemplate",
           "sesv2:UpdateEmailTemplate",
           "sesv2:DeleteEmailTemplate",
+          "sesv2:GetEmailTemplate",
+          "sesv2:ListEmailTemplates",
           "sesv2:GetAccount",
           "ses:GetSendQuota",
           "ses:GetSendStatistics",

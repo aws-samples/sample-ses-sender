@@ -12,7 +12,7 @@
 | **CloudFront** | 公网入口 + HTTPS，回源 ALB |
 | **ALB** | 转发到前端容器 |
 | **ECS Fargate** | 3 个服务：`frontend`(Next.js) / `backend`(FastAPI+发送引擎+SQS Worker) / `mcp`(MCP Server)，经 Service Connect 互通（`http://backend:8000`） |
-| **Aurora MySQL** | Serverless v2（0.5–4 ACU），凭据存 Secrets Manager |
+| **Aurora MySQL** | 3.10（`db.r8g.large` Graviton4 实例 + 自定义参数组），凭据存 Secrets Manager |
 | **SES Configuration Set** | 开启 VDM、关闭 Optimized Shared Delivery、TLS=OPTIONAL |
 | **事件链路** | SES → SNS → SQS（长轮询）+ CloudWatch（按 `batch_id` 维度出指标） |
 | **账户级 VDM** | 自定义资源自动 `PutAccountVdmAttributes`（开启参与度指标） |
@@ -109,7 +109,7 @@ npm run destroy
 
 ## 成本提示
 
-主要成本：NAT 网关（~$32/月/个）、ALB（~$16/月）、Aurora Serverless v2（按 ACU，最低 0.5 ACU）、Fargate（3 个小任务）、CloudFront/SES 按量。试用建议 `natGateways=1`。
+主要成本：NAT 网关（~$32/月/个）、ALB（~$16/月）、Aurora（`db.r8g.large` 实例按小时计费）、Fargate（3 个小任务）、CloudFront/SES 按量。试用建议 `natGateways=1`。
 
 ---
 
