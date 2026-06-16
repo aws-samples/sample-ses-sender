@@ -9,7 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "dompurify": "^3.2.4",
+    "dompurify": "^3.4.9",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3"
