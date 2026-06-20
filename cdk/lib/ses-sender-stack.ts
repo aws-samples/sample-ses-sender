@@ -13,6 +13,7 @@ import * as origins from "aws-cdk-lib/aws-cloudfront-origins";
 import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import * as ses from "aws-cdk-lib/aws-ses";
 import * as ecrAssets from "aws-cdk-lib/aws-ecr-assets";
+import * as elasticache from "aws-cdk-lib/aws-elasticache";
 import * as cr from "aws-cdk-lib/custom-resources";
 import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import * as path from "path";
@@ -146,6 +147,26 @@ export class SesSenderStack extends cdk.Stack {
       storageEncrypted: true,
     });
 
+    // ---- ElastiCache Redis（全局发送令牌桶限流）----
+    const redisSg = new ec2.SecurityGroup(this, "RedisSg", {
+      vpc,
+      description: "SES Sender Redis (global rate-limit token bucket)",
+      allowAllOutbound: true,
+    });
+    const redisSubnetGroup = new elasticache.CfnSubnetGroup(this, "RedisSubnets", {
+      description: "SES Sender Redis subnet group",
+      subnetIds: vpc.selectSubnets(workloadSubnets).subnetIds,
+    });
+    const redis = new elasticache.CfnCacheCluster(this, "Redis", {
+      engine: "redis",
+      cacheNodeType: "cache.t4g.micro",
+      numCacheNodes: 1,
+      vpcSecurityGroupIds: [redisSg.securityGroupId],
+      cacheSubnetGroupName: redisSubnetGroup.ref,
+    });
+    redis.addDependency(redisSubnetGroup);
+    const redisUrl = `redis://${redis.attrRedisEndpointAddress}:${redis.attrRedisEndpointPort}/0`;
+
     // ============================================================
     // 4. 消息层 — SNS Topic + SQS Queue（SES 事件 → SNS → SQS → 后端轮询）
     // ============================================================
@@ -160,6 +181,19 @@ export class SesSenderStack extends cdk.Stack {
       visibilityTimeout: Duration.seconds(300),
       retentionPeriod: Duration.days(14),
       deadLetterQueue: { queue: eventDlq, maxReceiveCount: 5 },
+    });
+
+    // ---- 发送任务队列（内部任务分发：Producer → SQS → 多实例 Consumer）----
+    const sendDlq = new sqs.Queue(this, "SendDlq", {
+      queueName: "ses-sender-send-dlq",
+      retentionPeriod: Duration.days(14),
+    });
+    const sendQueue = new sqs.Queue(this, "SendQueue", {
+      queueName: "ses-sender-send-queue",
+      receiveMessageWaitTime: Duration.seconds(20), // 长轮询
+      visibilityTimeout: Duration.seconds(120),     // 略大于单封发送耗时，失败自动重投
+      retentionPeriod: Duration.days(4),
+      deadLetterQueue: { queue: sendDlq, maxReceiveCount: 5 },
     });
 
     const eventTopic = new sns.Topic(this, "EventTopic", {
@@ -381,6 +415,11 @@ export class SesSenderStack extends cdk.Stack {
     );
     eventQueue.grantConsumeMessages(backendTaskRole);
     eventTopic.grantPublish(backendTaskRole);
+    // 发送队列：Producer 投递 + Consumer 消费
+    sendQueue.grantSendMessages(backendTaskRole);
+    sendQueue.grantConsumeMessages(backendTaskRole);
+    // 允许应用层访问 Redis
+    redisSg.addIngressRule(ecsSg, ec2.Port.tcp(6379), "app tier to redis");
 
     // ---- Backend Task Definition ----
     const backendTask = new ecs.FargateTaskDefinition(this, "BackendTask", {
@@ -402,6 +441,13 @@ export class SesSenderStack extends cdk.Stack {
         ENABLE_SENDER: "true",
         SENDER_CONCURRENCY: "2",
         SENDER_MESSAGE_RATE: "0",
+        // SQS 发送队列 + Redis 全局令牌桶（大批量 / 多实例水平扩展）
+        SEND_QUEUE_URL: sendQueue.queueUrl,
+        ENABLE_PRODUCER: "true",
+        ENABLE_CONSUMER: "true",
+        SEND_CONSUMER_THREADS: "4",
+        GLOBAL_SEND_RATE: "0",
+        REDIS_URL: redisUrl,
         DB_HOST: dbCluster.clusterEndpoint.hostname,
         DB_PORT: "3306",
         DB_NAME: DB_NAME,
@@ -533,6 +579,14 @@ export class SesSenderStack extends cdk.Stack {
     new cdk.CfnOutput(this, "SqsQueueUrl", {
       value: eventQueue.queueUrl,
       description: "SQS queue URL for SES event tracking",
+    });
+    new cdk.CfnOutput(this, "SendQueueUrl", {
+      value: sendQueue.queueUrl,
+      description: "SQS send queue URL (internal task dispatch)",
+    });
+    new cdk.CfnOutput(this, "RedisUrl", {
+      value: redisUrl,
+      description: "ElastiCache Redis endpoint (global send rate-limit token bucket)",
     });
     new cdk.CfnOutput(this, "ConfigurationSetName", {
       value: props.configurationSetName,

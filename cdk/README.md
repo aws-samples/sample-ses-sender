@@ -15,6 +15,8 @@
 | **Aurora MySQL** | 3.10（`db.r8g.large` Graviton4 实例 + 自定义参数组），凭据存 Secrets Manager |
 | **SES Configuration Set** | 开启 VDM、关闭 Optimized Shared Delivery、TLS=OPTIONAL |
 | **事件链路** | SES → SNS → SQS（长轮询）+ CloudWatch（按 `batch_id` 维度出指标） |
+| **发送队列** | 专用 SQS 发送队列（+ DLQ）：Producer 分页投递、多实例 Consumer 并行消费，支持大批量水平扩展 |
+| **ElastiCache Redis** | 全局发送令牌桶限流（`cache.t4g.micro`，私有子网），保证多实例总速率不超 SES 上限 |
 | **账户级 VDM** | 自定义资源自动 `PutAccountVdmAttributes`（开启参与度指标） |
 | **密钥** | JWT `SECRET_KEY`、数据库密码、MCP API Key 全部由 Secrets Manager 生成并注入容器，**无 AK/SK** |
 
@@ -109,7 +111,7 @@ npm run destroy
 
 ## 成本提示
 
-主要成本：NAT 网关（~$32/月/个）、ALB（~$16/月）、Aurora（`db.r8g.large` 实例按小时计费）、Fargate（3 个小任务）、CloudFront/SES 按量。试用建议 `natGateways=1`。
+主要成本：NAT 网关（~$32/月/个）、ALB（~$16/月）、Aurora（`db.r8g.large` 实例按小时计费）、ElastiCache Redis（`cache.t4g.micro` ~$12/月）、Fargate（3 个小任务）、SQS/CloudFront/SES 按量。试用建议 `natGateways=1`。
 
 ---
 

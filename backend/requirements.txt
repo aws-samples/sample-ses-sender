@@ -13,5 +13,6 @@ python-multipart
 openpyxl
 alembic
 defusedxml
+redis
 pytest
 pytest-mock

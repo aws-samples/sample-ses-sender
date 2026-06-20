@@ -316,10 +316,30 @@ _scheduler_thread = threading.Thread(target=_scheduler_worker, daemon=True)
 _scheduler_thread.start()
 
 
-# --- Sender Engine（单 Writer 模式） ---
-from core.config import ENABLE_SENDER, SENDER_CONCURRENCY, SENDER_MESSAGE_RATE, SENDER_SLIDING_WINDOW_SECONDS, SENDER_SLIDING_WINDOW_RATE
+# --- 发送引擎 ---
+# 模式选择：
+#   设置 SEND_QUEUE_URL → SQS 发送队列模式（Producer + 多实例 Consumer + Redis 全局令牌桶，支持水平扩展）
+#   否则 → 单实例内存队列引擎（ENABLE_SENDER）
+from core.config import (
+    ENABLE_SENDER, SENDER_CONCURRENCY, SENDER_MESSAGE_RATE,
+    SENDER_SLIDING_WINDOW_SECONDS, SENDER_SLIDING_WINDOW_RATE,
+    SEND_QUEUE_URL, ENABLE_PRODUCER, ENABLE_CONSUMER, SEND_CONSUMER_THREADS,
+)
 
-if ENABLE_SENDER:
+_engine_logger = logging.getLogger("ses-sender.engine")
+
+if SEND_QUEUE_URL:
+    from core.sqs_sender import start_sqs_engine
+    _engine_logger.info(
+        f"[Send] SQS 发送队列模式启动: producer={ENABLE_PRODUCER}, "
+        f"consumer={ENABLE_CONSUMER}, threads={SEND_CONSUMER_THREADS}"
+    )
+    _sqs_send_engine = start_sqs_engine(
+        enable_producer=ENABLE_PRODUCER,
+        enable_consumer=ENABLE_CONSUMER,
+        consumer_threads=SEND_CONSUMER_THREADS,
+    )
+elif ENABLE_SENDER:
     from core.sender import start_engine
     _sender_engine = start_engine(
         concurrency=SENDER_CONCURRENCY,
@@ -328,7 +348,7 @@ if ENABLE_SENDER:
         sliding_window_rate=SENDER_SLIDING_WINDOW_RATE,
     )
 else:
-    logging.getLogger("ses-sender.engine").info("[Sender Engine] ENABLE_SENDER=false，当前实例不处理发送任务")
+    _engine_logger.info("[Sender Engine] ENABLE_SENDER=false 且未配置 SEND_QUEUE_URL，当前实例不处理发送任务")
 
 
 @app.get("/")

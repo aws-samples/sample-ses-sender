@@ -45,3 +45,18 @@ SENDER_CONCURRENCY = int(os.getenv("SENDER_CONCURRENCY", "2"))
 SENDER_MESSAGE_RATE = int(os.getenv("SENDER_MESSAGE_RATE", "0"))  # 0=auto from SES MaxSendRate
 SENDER_SLIDING_WINDOW_SECONDS = int(os.getenv("SENDER_SLIDING_WINDOW_SECONDS", "0"))
 SENDER_SLIDING_WINDOW_RATE = int(os.getenv("SENDER_SLIDING_WINDOW_RATE", "0"))
+
+# ===== SQS 发送队列 + Redis 令牌桶模式（大批量 / 多实例水平扩展）=====
+# 设置 SEND_QUEUE_URL 即启用 SQS 发送模式（替代内存队列引擎）。
+SEND_QUEUE_URL = os.getenv("SEND_QUEUE_URL", "")
+# Producer：分页认领 detail 并投递到 SQS（仅单实例开启，避免重复投递）
+ENABLE_PRODUCER = os.getenv("ENABLE_PRODUCER", "true").lower() in ("true", "1", "yes")
+# Consumer：消费 SQS 发送（所有实例都可开启，水平扩展吞吐）
+ENABLE_CONSUMER = os.getenv("ENABLE_CONSUMER", "true").lower() in ("true", "1", "yes")
+# 每实例 Consumer 线程数
+SEND_CONSUMER_THREADS = int(os.getenv("SEND_CONSUMER_THREADS", "4"))
+
+# Redis 全局令牌桶（限流）。设置 REDIS_URL 即启用全局精确限流，否则降级为本地限流。
+REDIS_URL = os.getenv("REDIS_URL", "")
+# 全局每秒发送令牌数（0=auto，取 SES MaxSendRate）
+GLOBAL_SEND_RATE = int(os.getenv("GLOBAL_SEND_RATE", "0"))

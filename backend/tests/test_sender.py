@@ -92,7 +92,7 @@ class TestSendOneBlacklist:
         self.engine._total_errors = 0
 
     @patch("core.blacklist.is_blacklisted", return_value=True)
-    @patch.object(SenderEngine, "_update_detail_status")
+    @patch("core.sender.update_detail_status")
     def test_send_one_blacklist_skip(self, mock_update, mock_bl):
         task = SendTask(
             job_id=1, batch_id="b1", recipient="blocked@test.com", name="X",
@@ -106,7 +106,7 @@ class TestSendOneBlacklist:
 
     @patch("core.blacklist.is_blacklisted", return_value=False)
     @patch("core.database.SessionLocal")
-    @patch.object(SenderEngine, "_update_detail_status")
+    @patch("core.sender.update_detail_status")
     def test_send_one_duplicate_skip(self, mock_update, mock_session_cls, mock_bl):
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
@@ -126,12 +126,13 @@ class TestSendOneBlacklist:
     @patch("core.blacklist.is_blacklisted", return_value=False)
     @patch("core.database.SessionLocal")
     @patch("core.ses.sesv2_client")
-    @patch.object(SenderEngine, "_update_detail_status")
+    @patch("core.sender.update_detail_status")
     def test_send_one_success(self, mock_update, mock_ses, mock_session_cls, mock_bl):
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_detail = MagicMock()
         mock_detail.send_status = "Pending"
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = mock_detail
         mock_db.query.return_value.filter.return_value.first.return_value = mock_detail
         mock_ses.send_email.return_value = {"MessageId": "msg-abc"}
 
@@ -152,12 +153,13 @@ class TestSendOneBlacklist:
     @patch("core.blacklist.is_blacklisted", return_value=False)
     @patch("core.database.SessionLocal")
     @patch("core.ses.sesv2_client")
-    @patch.object(SenderEngine, "_update_detail_status")
+    @patch("core.sender.update_detail_status")
     def test_send_one_failure(self, mock_update, mock_ses, mock_session_cls, mock_bl):
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_detail = MagicMock()
         mock_detail.send_status = "Pending"
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = mock_detail
         mock_db.query.return_value.filter.return_value.first.return_value = mock_detail
         mock_ses.send_email.side_effect = Exception(
             "An error occurred (BadRequestException) when calling the SendEmail operation: Invalid email"
@@ -176,12 +178,13 @@ class TestSendOneBlacklist:
     @patch("core.blacklist.is_blacklisted", return_value=False)
     @patch("core.database.SessionLocal")
     @patch("core.ses.sesv2_client")
-    @patch.object(SenderEngine, "_update_detail_status")
+    @patch("core.sender.update_detail_status")
     def test_send_one_with_attachments(self, mock_update, mock_ses, mock_session_cls, mock_bl):
         mock_db = MagicMock()
         mock_session_cls.return_value = mock_db
         mock_detail = MagicMock()
         mock_detail.send_status = "Pending"
+        mock_db.query.return_value.filter.return_value.order_by.return_value.first.return_value = mock_detail
         mock_db.query.return_value.filter.return_value.first.return_value = mock_detail
         mock_ses.send_email.return_value = {"MessageId": "msg-att"}
 
