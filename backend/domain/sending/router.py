@@ -47,6 +47,8 @@ async def unsubscribe_post(request: Request, db: Session = Depends(get_db)):
     if not existing:
         db.add(UnsubscribeRecord(email=email, source_email=source_email, reason=reason[:64]))
         db.commit()
+        from core import redis_cache
+        redis_cache.sadd(f"unsub:{source_email}", email)
         logger.info(f"[Unsubscribe] {email} unsubscribed from {source_email} reason={reason}")
 
     return PlainTextResponse("ok", status_code=200)
@@ -407,8 +409,11 @@ def delete_unsubscribe(
         raise HTTPException(status_code=404, detail="记录不存在")
     if not current_user.is_admin and record.source_email != current_user.email:
         raise HTTPException(status_code=403, detail="无权操作")
+    _src, _email = record.source_email, record.email
     db.delete(record)
     db.commit()
+    from core import redis_cache
+    redis_cache.srem(f"unsub:{_src}", _email)
     return {"message": "已恢复，该邮箱将重新接收邮件"}
 
 
@@ -426,8 +431,13 @@ def batch_delete_unsubscribe(
     query = db.query(UnsubscribeRecord).filter(UnsubscribeRecord.id.in_(ids))
     if not current_user.is_admin:
         query = query.filter(UnsubscribeRecord.source_email == current_user.email)
+    affected = query.all()
+    pairs = [(r.source_email, r.email) for r in affected]
     count = query.delete(synchronize_session=False)
     db.commit()
+    from core import redis_cache
+    for _src, _email in pairs:
+        redis_cache.srem(f"unsub:{_src}", _email)
     return {"message": f"已恢复 {count} 条记录"}
 
 

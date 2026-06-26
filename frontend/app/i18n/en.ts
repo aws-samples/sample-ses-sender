@@ -69,6 +69,7 @@ const en: Record<string, string> = {
   "menu.test": "Test Email",
   "menu.settings": "Settings",
   "menu.logs": "Logs",
+  "menu.blacklist": "Blacklist",
 
   // ==================== Dashboard ====================
   "dashboard.todaySent": "Today",
@@ -283,9 +284,10 @@ const en: Record<string, string> = {
   "send.startSend": "Start Bulk Send",
   "send.sending": "Sending...",
   "send.taskCreated": "Task created",
-  "send.sendingBg": "Sending {count} emails in background...",
+  "send.sendingBg": "Sending {count} emails in the background. You can close this page; track progress in Sending History.",
   "send.progress": "Sent {sent} / {total}",
   "send.sendingHint": "Sending in progress, please don't close this page...",
+  "send.bgHint": "Sending in background — you can close this page anytime, it won't affect delivery",
   "send.done": "Send complete",
   "send.doneMsg": "Sent {sent}/{total} emails",
   "send.partialMsg": "Partially successful",
@@ -650,6 +652,17 @@ const en: Record<string, string> = {
   "settings.image.localStorage": "Local Storage",
   "settings.image.useEnvDefault": "Use environment default",
   "settings.image.s3CredCleared": "S3 credentials cleared",
+  "settings.image.r2": "Cloudflare R2",
+  "settings.image.r2Desc": "Upload to an R2 bucket (S3-compatible); requires a public access domain",
+  "settings.image.r2Config": "R2 Bucket Configuration",
+  "settings.image.r2AccountId": "Account ID *",
+  "settings.image.r2PublicUrl": "Public Access Domain",
+  "settings.image.r2PublicUrlHint": "Required. R2 buckets are private by default; enable public access (r2.dev) or bind a custom domain, otherwise images in emails won't load. Image URLs are built from this domain.",
+  "settings.image.r2Credentials": "R2 Credentials",
+  "settings.image.r2CredentialsHint": "S3-compatible credentials from an R2 API Token",
+  "settings.image.clearR2": "Clear R2 credentials",
+  "settings.image.r2CredCleared": "R2 credentials cleared",
+  "settings.image.r2Storage": "R2 Storage",
 
   // Unsubscribe Page
   "settings.unsub.title": "Default Unsubscribe Page",

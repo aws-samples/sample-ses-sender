@@ -163,6 +163,25 @@ async def upload_image(file: UploadFile = File(...), current_user=Depends(get_cu
         else:
             url = f"https://{cfg['s3_bucket']}.s3.{cfg['s3_region']}.amazonaws.com/{s3_key}"
         return {"url": url, "filename": filename, "size": len(contents), "storage": "s3"}
+    elif cfg["mode"] == "r2" and cfg["r2_bucket"] and cfg["r2_account_id"]:
+        import boto3
+        endpoint = f"https://{cfg['r2_account_id']}.r2.cloudflarestorage.com"
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            region_name="auto",
+            aws_access_key_id=cfg["r2_access_key"],
+            aws_secret_access_key=cfg["r2_secret_key"],
+        )
+        r2_key = f"{cfg['r2_prefix']}{filename}"
+        s3.put_object(Bucket=cfg["r2_bucket"], Key=r2_key, Body=contents, ContentType=file.content_type or "image/png")
+
+        # R2 桶默认私有且无固定公网默认域名，必须配置公开访问域名才能在邮件中被访问。
+        if cfg["r2_public_url"]:
+            url = f"{cfg['r2_public_url'].rstrip('/')}/{r2_key}"
+        else:
+            url = f"{endpoint}/{cfg['r2_bucket']}/{r2_key}"  # 兜底直链（私有桶通常访问不到）
+        return {"url": url, "filename": filename, "size": len(contents), "storage": "r2"}
     else:
         filepath = os.path.join(UPLOAD_DIR, filename)
         with open(filepath, "wb") as fp:

@@ -404,6 +404,8 @@ export class SesSenderStack extends cdk.Stack {
           "sesv2:GetEmailTemplate",
           "sesv2:ListEmailTemplates",
           "sesv2:GetAccount",
+          "ses:GetAccount",
+          "ses:GetAccountSendingEnabled",
           "ses:GetSendQuota",
           "ses:GetSendStatistics",
           "cloudwatch:GetMetricStatistics",

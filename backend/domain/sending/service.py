@@ -18,6 +18,12 @@ def get_user_dashboard(db: Session, user_id: int) -> dict:
     """获取用户的发送统计 Dashboard 数据"""
     from datetime import datetime, timedelta
     from sqlalchemy import func, case
+    from core import redis_cache
+
+    _ck = f"dashboard:user:{user_id}"
+    cached = redis_cache.get_json(_ck)
+    if cached is not None:
+        return cached
 
     now = datetime.utcnow()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -73,7 +79,7 @@ def get_user_dashboard(db: Session, user_id: int) -> dict:
         "status": j.status, "created_at": j.created_at.isoformat() if j.created_at else None,
     } for j in recent_jobs]
 
-    return {
+    result = {
         "summary": {
             "total_jobs": total_jobs, "total_emails": total_emails,
             "today_sent": today_sent, "month_sent": month_sent,
@@ -84,21 +90,46 @@ def get_user_dashboard(db: Session, user_id: int) -> dict:
         "daily_trend": daily_trend,
         "recent_jobs": recent,
     }
+    redis_cache.set_json(_ck, result, 60)
+    return result
+
+
+def _quota_key(user_id: int, day: str) -> str:
+    return f"quota:{user_id}:{day}"
+
+
+def _end_of_utc_day_ts() -> int:
+    """返回当前 UTC 日结束时刻的 epoch 秒（用于 Redis 计数器过期）。"""
+    from datetime import datetime, timedelta
+    now = datetime.utcnow()
+    end = now.replace(hour=23, minute=59, second=59, microsecond=0) + timedelta(seconds=1)
+    return int(end.timestamp())
 
 
 def get_user_daily_quota(db: Session, user_id: int) -> dict:
-    """获取用户当日发送配额使用情况"""
+    """获取用户当日发送配额使用情况。今日已发量优先读 Redis 计数器，未命中回填。"""
     from datetime import datetime
     from sqlalchemy import func
     from domain.auth.models import User as UserModel
+    from core import redis_cache
 
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
     daily_limit = (user.daily_send_limit if user and user.daily_send_limit else 1000)
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_sent = db.query(func.coalesce(func.sum(SendingJob.total_contacts), 0)).filter(
-        SendingJob.user_id == user_id,
-        SendingJob.created_at >= today_start,
-    ).scalar()
+
+    now = datetime.utcnow()
+    day = now.strftime("%Y%m%d")
+    ck = _quota_key(user_id, day)
+
+    today_sent = redis_cache.get_int(ck)
+    if today_sent is None:
+        # 缓存未命中 / Redis 不可用：回退 DB 聚合，并回填 Redis
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today_sent = int(db.query(func.coalesce(func.sum(SendingJob.total_contacts), 0)).filter(
+            SendingJob.user_id == user_id,
+            SendingJob.created_at >= today_start,
+        ).scalar() or 0)
+        redis_cache.set_int(ck, today_sent, _end_of_utc_day_ts())
+
     return {
         "daily_limit": daily_limit,
         "today_sent": today_sent,
@@ -158,6 +189,7 @@ def send_bulk_email(
         raise HTTPException(status_code=400, detail="您尚未配置发送邮箱，请联系管理员")
 
     # 检查每日发送限额
+    from core import redis_cache
     quota = get_user_daily_quota(db, user_id)
     daily_limit = quota["daily_limit"]
     today_sent = quota["today_sent"]
@@ -180,14 +212,34 @@ def send_bulk_email(
     if total_in_group == 0:
         raise HTTPException(status_code=404, detail="客群中没有联系人")
 
-    remaining = daily_limit - today_sent
-    if remaining <= 0:
-        raise HTTPException(status_code=429, detail=f"今日发送配额已用完（限额 {daily_limit} 封），请明天再试")
-    if total_in_group > remaining:
-        raise HTTPException(
-            status_code=429,
-            detail=f"今日剩余配额 {remaining} 封（限额 {daily_limit}，已用 {today_sent}），该客群有 {total_in_group} 个联系人，超出配额"
-        )
+    # ===== 原子配额预占（修复并发 TOCTOU 超发）=====
+    # 用 Redis 计数器先按 total_in_group 上限预占；超额则回滚并拒绝。
+    # Redis 不可用时退回非原子的 DB 校验（与原逻辑一致）。
+    from datetime import datetime as _dt
+    _day = _dt.utcnow().strftime("%Y%m%d")
+    _qk = _quota_key(user_id, _day)
+    _reserved = redis_cache.incrby(_qk, total_in_group, _end_of_utc_day_ts())
+    if _reserved is not None:
+        if _reserved > daily_limit:
+            # 预占失败，回滚并拒绝
+            redis_cache.incrby(_qk, -total_in_group)
+            _rem = max(0, daily_limit - (_reserved - total_in_group))
+            if _rem <= 0:
+                raise HTTPException(status_code=429, detail=f"今日发送配额已用完（限额 {daily_limit} 封），请明天再试")
+            raise HTTPException(
+                status_code=429,
+                detail=f"今日剩余配额 {_rem} 封（限额 {daily_limit}），该客群有 {total_in_group} 个联系人，超出配额"
+            )
+    else:
+        # Redis 不可用：退回原 DB 校验
+        remaining = daily_limit - today_sent
+        if remaining <= 0:
+            raise HTTPException(status_code=429, detail=f"今日发送配额已用完（限额 {daily_limit} 封），请明天再试")
+        if total_in_group > remaining:
+            raise HTTPException(
+                status_code=429,
+                detail=f"今日剩余配额 {remaining} 封（限额 {daily_limit}，已用 {today_sent}），该客群有 {total_in_group} 个联系人，超出配额"
+            )
 
     # 生成唯一批次 ID
     batch_id = f"batch-{uuid.uuid4().hex[:12]}"
@@ -195,13 +247,23 @@ def send_bulk_email(
     tpl_name = tpl.name if tpl else "unknown"
     group_name = group.name
 
-    # 过滤已退订的邮箱（集合查询，一次性拿退订列表）
+    # 过滤已退订的邮箱：优先 Redis Set（避免每批全表扫描），未就绪则 DB 加载并回填
     from domain.sending.models import UnsubscribeRecord
-    unsub_emails = set(
-        r[0] for r in db.query(UnsubscribeRecord.email).filter(
-            UnsubscribeRecord.source_email == source_email
-        ).all()
-    )
+    _unsub_set_key = f"unsub:{source_email}"
+    _unsub_loaded_key = f"unsub:loaded:{source_email}"
+    unsub_emails = None
+    if redis_cache.key_exists(_unsub_loaded_key):
+        unsub_emails = redis_cache.smembers(_unsub_set_key)
+    if unsub_emails is None:
+        unsub_emails = set(
+            r[0] for r in db.query(UnsubscribeRecord.email).filter(
+                UnsubscribeRecord.source_email == source_email
+            ).all()
+        )
+        # 回填 Redis（1 天 TTL；退订写入时会实时 SADD）
+        if redis_cache.available():
+            redis_cache.replace_set(_unsub_set_key, unsub_emails, ttl=86400)
+            redis_cache.setex(_unsub_loaded_key, "1", 86400)
 
     # 获取用户的收件邮箱作为 reply_to
     from domain.auth.models import User as UserModel
@@ -270,6 +332,13 @@ def send_bulk_email(
     # 回填真实联系人总数
     job.total_contacts = active_count + skipped_count
     db.commit()
+
+    # 配额计数器对账：预占了 total_in_group，实际去重后为 actual，退回多占部分
+    if _reserved is not None:
+        actual = active_count + skipped_count
+        diff = total_in_group - actual
+        if diff > 0:
+            redis_cache.incrby(_qk, -diff)
 
     # Sender Engine（Scanner）会自动拾取 status=queued 的 job 并按 detail 分页发送。
     # 不再在请求线程里同步发送，避免大批量阻塞 HTTP / 占用内存。
@@ -421,6 +490,11 @@ def get_admin_stats(db: Session) -> dict:
     """管理员：获取所有用户的发送统计"""
     from domain.auth.models import User as UserModel
     from sqlalchemy import func, case
+    from core import redis_cache
+
+    cached = redis_cache.get_json("dashboard:admin_stats")
+    if cached is not None:
+        return cached
 
     # 按用户汇总
     user_stats = db.query(
@@ -461,7 +535,7 @@ def get_admin_stats(db: Session) -> dict:
     total_contacts = sum(i["total_contacts"] for i in items)
     total_success = sum(i["success_count"] for i in items)
 
-    return {
+    result = {
         "summary": {
             "total_users": len(items),
             "total_jobs": total_jobs,
@@ -470,6 +544,8 @@ def get_admin_stats(db: Session) -> dict:
         },
         "users": sorted(items, key=lambda x: x["total_contacts"], reverse=True),
     }
+    redis_cache.set_json("dashboard:admin_stats", result, 60)
+    return result
 
 
 def get_admin_all_jobs(db: Session, page: int = 1, page_size: int = 15) -> dict:

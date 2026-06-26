@@ -23,7 +23,7 @@ export default function Home() {
       return res;
     };
   },[]);
-  const login=async(un:string,pw:string)=>{const r=await fetch(`${API}/auth/login`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:un,password:pw})});if(!r.ok){const e=await r.json();throw new Error(e.detail||"Login failed");}const d=await r.json();setToken(d.access_token);setUser(d.user);localStorage.setItem("ses_token",d.access_token);localStorage.setItem("ses_user",JSON.stringify(d.user));};
+  const login=async(un:string,pw:string,captchaId?:string,captchaCode?:string)=>{const r=await fetch(`${API}/auth/login`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:un,password:pw,captcha_id:captchaId,captcha_code:captchaCode})});if(!r.ok){const e=await r.json();throw new Error(e.detail||"Login failed");}const d=await r.json();setToken(d.access_token);setUser(d.user);localStorage.setItem("ses_token",d.access_token);localStorage.setItem("ses_user",JSON.stringify(d.user));};
   const logout=()=>{setToken("");setUser(null);localStorage.removeItem("ses_token");localStorage.removeItem("ses_user");};
   const ssoLogin=(ssoToken:string,ssoUser:any)=>{setToken(ssoToken);setUser(ssoUser);localStorage.setItem("ses_token",ssoToken);localStorage.setItem("ses_user",JSON.stringify(ssoUser));};
   if(!user) return <LocaleProvider><ToastProvider><LoginPage onLogin={login} onSsoLogin={ssoLogin}/></ToastProvider></LocaleProvider>;

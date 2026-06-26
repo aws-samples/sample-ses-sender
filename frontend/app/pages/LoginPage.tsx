@@ -1,40 +1,30 @@
 "use client";
 import React, { useState, useCallback, useEffect } from "react";
+import { API } from "../components/shared";
 
-function useSimpleCaptcha() {
-  const [code,setCode]=useState(""); const [canvas,setCanvas]=useState<HTMLCanvasElement|null>(null);
-  const generate=useCallback(()=>{
-    const chars="ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
-    let c=""; for(let i=0;i<4;i++) c+=chars[Math.floor(Math.random()*chars.length)];
-    setCode(c);
-    if(canvas){
-      const ctx=canvas.getContext("2d"); if(!ctx)return;
-      const w=canvas.width, h=canvas.height;
-      ctx.fillStyle="#f0f0f0"; ctx.fillRect(0,0,w,h);
-      for(let i=0;i<4;i++){ctx.strokeStyle=`hsl(${Math.random()*360},50%,70%)`; ctx.beginPath(); ctx.moveTo(Math.random()*w,Math.random()*h); ctx.lineTo(Math.random()*w,Math.random()*h); ctx.stroke();}
-      for(let i=0;i<30;i++){ctx.fillStyle=`hsl(${Math.random()*360},40%,70%)`; ctx.fillRect(Math.random()*w,Math.random()*h,2,2);}
-      for(let i=0;i<c.length;i++){
-        ctx.save();
-        ctx.font=`${20+Math.random()*6}px "Courier New", monospace`;
-        ctx.fillStyle=`hsl(${Math.random()*360},70%,35%)`;
-        ctx.translate(18+i*26, 28+Math.random()*6);
-        ctx.rotate((Math.random()-0.5)*0.4);
-        ctx.fillText(c[i],0,0);
-        ctx.restore();
-      }
+function useServerCaptcha() {
+  const [image, setImage] = useState("");
+  const [captchaId, setCaptchaId] = useState("");
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/auth/captcha`);
+      const d = await r.json();
+      setImage(d.image || "");
+      setCaptchaId(d.captcha_id || "");
+    } catch {
+      setImage("");
+      setCaptchaId("");
     }
-  },[canvas]);
-  const ref=useCallback((el:HTMLCanvasElement|null)=>{setCanvas(el);},[]);
-  useEffect(()=>{if(canvas)generate();},[canvas,generate]);
-  const verify=(input:string)=>input.toLowerCase()===code.toLowerCase();
-  return {ref,generate,verify};
+  }, []);
+  useEffect(() => { refresh(); }, [refresh]);
+  return { image, captchaId, refresh };
 }
 
-export default function LoginPage({onLogin,onSsoLogin}:{onLogin:(un:string,pw:string)=>Promise<void>;onSsoLogin?:(token:string,user:any)=>void}) {
+export default function LoginPage({onLogin,onSsoLogin}:{onLogin:(un:string,pw:string,captchaId?:string,captchaCode?:string)=>Promise<void>;onSsoLogin?:(token:string,user:any)=>void}) {
   const [u,setU]=useState("");const [p,setP]=useState("");const [captchaInput,setCaptchaInput]=useState("");
   const [err,setErr]=useState("");const [ld,setLd]=useState(false);
   const [ssoProviders,setSsoProviders]=useState<{id:string;name:string;icon:string}[]>([]);
-  const captcha=useSimpleCaptcha();
+  const captcha=useServerCaptcha();
   let t:(k:string)=>string = (k)=>k, locale="zh", setLocale:(l:any)=>void = ()=>{};
   try { const i18n = require("../i18n"); t=i18n.useT(); const lc=i18n.useLocale(); locale=lc.locale; setLocale=lc.setLocale; } catch {}
 
@@ -59,8 +49,13 @@ export default function LoginPage({onLogin,onSsoLogin}:{onLogin:(un:string,pw:st
 
   const go=async(e:React.FormEvent)=>{
     e.preventDefault(); setErr("");
-    if(!captcha.verify(captchaInput)){setErr(t("login.captchaError"));captcha.generate();setCaptchaInput("");return;}
-    setLd(true);try{await onLogin(u,p);}catch(e:any){setErr(e.message);captcha.generate();setCaptchaInput("");}finally{setLd(false);}
+    if(!captchaInput.trim()){setErr(t("login.captchaError"));return;}
+    setLd(true);
+    try{
+      await onLogin(u,p,captcha.captchaId,captchaInput);
+    }catch(e:any){
+      setErr(e.message);captcha.refresh();setCaptchaInput("");
+    }finally{setLd(false);}
   };
 
   return <div className="min-h-screen flex items-center justify-center" style={{background:"linear-gradient(135deg,#3C50E0 0%,#6366F1 50%,#8B5CF6 100%)"}}>
@@ -75,7 +70,9 @@ export default function LoginPage({onLogin,onSsoLogin}:{onLogin:(un:string,pw:st
           <label className="text-sm font-medium text-gray-700 mb-1.5 block">{t("login.captcha")}</label>
           <div className="flex gap-3">
             <input className="flex-1 h-11 px-4 border border-gray-200 rounded-lg text-gray-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition tracking-widest" placeholder={t("login.captchaPlaceholder")} value={captchaInput} onChange={e=>setCaptchaInput(e.target.value)} autoComplete="off"/>
-            <canvas ref={captcha.ref} width={120} height={40} onClick={captcha.generate} className="rounded-lg cursor-pointer border border-gray-200 flex-shrink-0 hover:opacity-80 transition" title={t("login.captchaRefresh")}/>
+            {captcha.image
+              ? <img src={captcha.image} width={120} height={40} onClick={()=>{captcha.refresh();setCaptchaInput("");}} className="rounded-lg cursor-pointer border border-gray-200 flex-shrink-0 hover:opacity-80 transition" title={t("login.captchaRefresh")} alt="captcha"/>
+              : <div onClick={()=>{captcha.refresh();setCaptchaInput("");}} style={{width:120,height:40}} className="rounded-lg cursor-pointer border border-gray-200 flex-shrink-0 bg-gray-50 flex items-center justify-center text-xs text-gray-400 hover:opacity-80 transition">···</div>}
           </div>
           <p className="text-xs text-gray-400 mt-1">{t("login.captchaRefresh")}</p>
         </div>

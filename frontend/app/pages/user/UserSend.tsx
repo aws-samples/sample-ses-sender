@@ -52,8 +52,10 @@ export default function UserSend() {
       const r=await fetch(`${API}/send-bulk`,{method:"POST",headers:authH(token),body:JSON.stringify({TemplateId:parseInt(f.templateId),GroupId:parseInt(f.groupId)})});
       const d=await r.json();
       if(r.ok){
-        toast("info",t("send.taskCreated"),t("send.sendingBg",{count:d.total_contacts}));
+        // 后端为异步发送：提交成功即返回，立即解锁。后台由 Sender Engine 处理，关闭页面不影响发送。
+        toast("success",t("send.taskCreated"),t("send.sendingBg",{count:d.total_contacts}));
         setProgress({batch_id:d.batch_id,status:"queued",total_contacts:d.total_contacts,sent_count:0,progress:0});
+        setLd(false);
         pollProgress(d.batch_id);
       }else{toast("error",t("common.failed"),d.detail);setLd(false);}
     }catch{toast("error",t("common.networkError"));setLd(false);}
@@ -62,7 +64,7 @@ export default function UserSend() {
   const stText=(s:string)=>({"queued":t("status.queued"),"sending":t("status.sending"),"success":t("send.done"),"partial":t("send.partialMsg"),"failed":t("send.failedMsg")}[s]||s);
   const stColor=(s:string)=>({"queued":"#6B7280","sending":"#3B82F6","success":"#10B981","partial":"#F59E0B","failed":"#EF4444"}[s]||"#6B7280");
 
-  return <div style={{maxWidth:640}}><Card title={t("send.title")}>
+  return <div className="w-full flex justify-center"><div className="w-full" style={{maxWidth:640}}><Card title={t("send.title")}>
     <div className="space-y-4">
       <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4"><span className="text-sm text-indigo-700">{t("send.fromEmail",{email:user.email||t("send.noEmail")})}</span></div>
       <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
@@ -114,9 +116,9 @@ export default function UserSend() {
             <div className="h-full rounded-full transition-all duration-500" style={{width:`${progress.progress}%`,background:progress.status==="failed"?"#EF4444":progress.status==="success"?"#10B981":"#6366F1"}}/>
           </div>
         </div>
-        {progress.status==="sending"&&<div className="flex items-center gap-2 text-xs text-blue-500"><span className="inline-block w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"/>{t("send.sendingHint")}</div>}
+        {(progress.status==="queued"||progress.status==="sending")&&<div className="flex items-center gap-2 text-xs text-gray-400"><span className="inline-block w-3 h-3 border-2 border-gray-300 border-t-transparent rounded-full animate-spin"/>{t("send.bgHint")}</div>}
         {progress.error_message&&<p className="text-xs text-red-500">{progress.error_message}</p>}
       </div>}
     </div>
-  </Card></div>;
+  </Card></div></div>;
 }

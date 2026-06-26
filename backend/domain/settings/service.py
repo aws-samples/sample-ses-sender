@@ -1,6 +1,20 @@
 from sqlalchemy.orm import Session
 from domain.auth.models import SystemSetting
 from core.config import BEDROCK_MODEL_ID, BEDROCK_REGION
+from core import redis_cache
+
+# Redis 缓存键
+_CK_ALL = "settings:all"          # get_all_settings 脱敏结果
+_CK_AI_MODELS = "settings:ai_models"
+_CK_UNSUB_PREFIX = "settings:unsub_page:"   # + source_email（或 __default__）
+_CACHE_TTL = 300
+
+
+def _invalidate_cache():
+    """系统设置变更后失效相关缓存（unsub 页按 source_email 分键，靠短 TTL 自然过期，
+    这里删除已知固定键 + 默认 unsub 键）。"""
+    redis_cache.delete(_CK_ALL, _CK_AI_MODELS,
+                       _CK_UNSUB_PREFIX + "__default__")
 
 SETTING_KEYS = [
     "ai_provider",           # bedrock / openai_compatible
@@ -15,13 +29,20 @@ SETTING_KEYS = [
     "openai_api_key",        # API Key
     "openai_model",          # Model name, e.g. gpt-4o, claude-3-sonnet
     # 图片存储
-    "image_storage_mode",    # local / s3
+    "image_storage_mode",    # local / s3 / r2
     "image_s3_bucket",
     "image_s3_region",
     "image_s3_prefix",       # S3 key 前缀，如 "ses-sender/images/"
     "image_s3_access_key",   # 为空则用 IAM Role
     "image_s3_secret_key",
     "image_base_url",        # 回显域名，如 https://cdn.example.com
+    # Cloudflare R2（S3 兼容）
+    "image_r2_account_id",   # R2 账户 ID，用于拼 endpoint
+    "image_r2_bucket",
+    "image_r2_prefix",       # key 前缀，如 "ses-sender/images/"
+    "image_r2_access_key",   # R2 API Token 的 Access Key ID
+    "image_r2_secret_key",   # R2 API Token 的 Secret Access Key
+    "image_r2_public_url",   # 公开访问域名（必填），如 https://xxx.r2.dev 或自定义域名
     # 退订页面自定义
     "unsub_page_title",      # 页面标题
     "unsub_page_subtitle",   # 副标题/描述
@@ -45,10 +66,13 @@ SETTING_KEYS = [
 ]
 
 _SECRET_KEYS = {"bedrock_secret_key", "bedrock_api_key", "openai_api_key", "image_s3_secret_key",
-                "sso_github_client_secret", "sso_google_client_secret"}
+                "image_r2_secret_key", "sso_github_client_secret", "sso_google_client_secret"}
 
 
 def get_all_settings(db: Session) -> dict:
+    cached = redis_cache.get_json(_CK_ALL)
+    if cached is not None:
+        return cached
     rows = db.query(SystemSetting).filter(SystemSetting.key.in_(SETTING_KEYS)).all()
     result = {k: "" for k in SETTING_KEYS}
     for r in rows:
@@ -65,6 +89,7 @@ def get_all_settings(db: Session) -> dict:
     has_api_key = bool(result.get("bedrock_api_key"))
     has_openai_key = bool(result.get("openai_api_key"))
     has_s3_sk = bool(result.get("image_s3_secret_key"))
+    has_r2_sk = bool(result.get("image_r2_secret_key"))
     for k in _SECRET_KEYS:
         result.pop(k, None)
     result["bedrock_has_ak_sk"] = has_ak_sk
@@ -73,8 +98,10 @@ def get_all_settings(db: Session) -> dict:
     result["sso_has_github_secret"] = bool(result.get("sso_github_client_secret"))
     result["sso_has_google_secret"] = bool(result.get("sso_google_client_secret"))
     result["image_has_s3_secret"] = has_s3_sk
+    result["image_has_r2_secret"] = has_r2_sk
     if not result.get("image_storage_mode"):
         result["image_storage_mode"] = "local"
+    redis_cache.set_json(_CK_ALL, result, _CACHE_TTL)
     return result
 
 
@@ -93,6 +120,7 @@ def save_settings(db: Session, data: dict):
         else:
             db.add(SystemSetting(key=key, value=val))
     db.commit()
+    _invalidate_cache()
 
 
 def get_image_storage_config(db: Session) -> dict:
@@ -109,12 +137,23 @@ def get_image_storage_config(db: Session) -> dict:
         "s3_access_key": cfg.get("image_s3_access_key") or None,
         "s3_secret_key": cfg.get("image_s3_secret_key") or None,
         "base_url": cfg.get("image_base_url") or "",
+        "r2_account_id": cfg.get("image_r2_account_id") or "",
+        "r2_bucket": cfg.get("image_r2_bucket") or "",
+        "r2_prefix": cfg.get("image_r2_prefix") or "ses-sender/images/",
+        "r2_access_key": cfg.get("image_r2_access_key") or None,
+        "r2_secret_key": cfg.get("image_r2_secret_key") or None,
+        "r2_public_url": cfg.get("image_r2_public_url") or "",
     }
 
 
 def get_unsub_page_config(db: Session, source_email: str = None) -> dict:
     """获取退订页面自定义配置（优先用户级，fallback 系统级）"""
     import json as _json
+
+    cache_key = _CK_UNSUB_PREFIX + (source_email or "__default__")
+    cached = redis_cache.get_json(cache_key)
+    if cached is not None:
+        return cached
 
     user_cfg = {}
     if source_email:
@@ -151,7 +190,7 @@ def get_unsub_page_config(db: Session, source_email: str = None) -> dict:
         except Exception:
             pass
 
-    return {
+    result = {
         "title": val("title", "unsub_page_title", "退订确认"),
         "subtitle": val("subtitle", "unsub_page_subtitle", "我们很遗憾看到您离开。请告诉我们退订原因，帮助我们改进服务。"),
         "reasons": reasons,
@@ -160,6 +199,8 @@ def get_unsub_page_config(db: Session, source_email: str = None) -> dict:
         "color": val("color", "unsub_page_color", "#667eea"),
         "buttonText": val("buttonText", "unsub_page_button_text", "确认退订"),
     }
+    redis_cache.set_json(cache_key, result, _CACHE_TTL)
+    return result
 
 
 def get_bedrock_config(db: Session) -> dict:
@@ -195,15 +236,20 @@ def get_ai_provider(db: Session) -> str:
 def get_ai_models(db: Session) -> list:
     """获取 AI Provider+Model 列表"""
     import json as _json
+    cached = redis_cache.get_json(_CK_AI_MODELS)
+    if cached is not None:
+        return cached
     row = db.query(SystemSetting).filter(SystemSetting.key == "ai_models").first()
+    result = []
     if row and row.value:
         try:
             data = _json.loads(row.value)
             if isinstance(data, list):
-                return data
+                result = data
         except Exception:
             pass
-    return []
+    redis_cache.set_json(_CK_AI_MODELS, result, _CACHE_TTL)
+    return result
 
 
 def save_ai_models(db: Session, providers: list):
@@ -215,6 +261,7 @@ def save_ai_models(db: Session, providers: list):
     else:
         db.add(SystemSetting(key="ai_models", value=val))
     db.commit()
+    redis_cache.delete(_CK_AI_MODELS)
 
 
 def get_ai_model_by_id(db: Session, model_id: str) -> dict:

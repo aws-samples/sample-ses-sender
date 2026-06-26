@@ -142,3 +142,47 @@ class TestProcessSesEvent:
         }
         process_ses_event(event_data, db)
         db.commit.assert_not_called()
+
+
+class TestDailyQuotaRedis:
+    """每日配额 Redis 计数器：命中缓存直接用，未命中回退 DB 并回填。"""
+
+    def test_quota_uses_redis_counter_when_present(self):
+        from domain.sending import service
+        from core import redis_cache
+
+        db = MagicMock()
+        user = MagicMock()
+        user.daily_send_limit = 1000
+        db.query.return_value.filter.return_value.first.return_value = user
+
+        with patch.object(redis_cache, "get_int", return_value=300) as gi, \
+             patch.object(redis_cache, "set_int") as si:
+            q = service.get_user_daily_quota(db, user_id=7)
+
+        gi.assert_called_once()
+        # 命中缓存就不应回填
+        si.assert_not_called()
+        assert q["today_sent"] == 300
+        assert q["daily_limit"] == 1000
+        assert q["remaining"] == 700
+
+    def test_quota_falls_back_to_db_and_backfills(self):
+        from domain.sending import service
+        from core import redis_cache
+
+        db = MagicMock()
+        user = MagicMock()
+        user.daily_send_limit = 500
+        db.query.return_value.filter.return_value.first.return_value = user
+        # DB 聚合返回 120
+        db.query.return_value.filter.return_value.scalar.return_value = 120
+
+        with patch.object(redis_cache, "get_int", return_value=None), \
+             patch.object(redis_cache, "set_int") as si:
+            q = service.get_user_daily_quota(db, user_id=9)
+
+        si.assert_called_once()  # 回填 Redis
+        assert q["today_sent"] == 120
+        assert q["remaining"] == 380
+

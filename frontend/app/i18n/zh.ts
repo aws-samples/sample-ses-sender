@@ -69,6 +69,7 @@ const zh: Record<string, string> = {
   "menu.test": "测试邮件",
   "menu.settings": "系统设置",
   "menu.logs": "系统日志",
+  "menu.blacklist": "黑名单",
 
   // ==================== 数据概览 ====================
   "dashboard.todaySent": "今日发送",
@@ -283,9 +284,10 @@ const zh: Record<string, string> = {
   "send.startSend": "开始批量发送",
   "send.sending": "发送中...",
   "send.taskCreated": "任务已创建",
-  "send.sendingBg": "正在后台发送 {count} 封邮件...",
+  "send.sendingBg": "正在后台发送 {count} 封邮件，可关闭页面，进度可在「发送历史」查看",
   "send.progress": "已发送 {sent} / {total} 封",
   "send.sendingHint": "正在发送中，请勿关闭页面...",
+  "send.bgHint": "后台发送中，可随时关闭页面，发送不受影响",
   "send.done": "发送完成",
   "send.doneMsg": "已发送 {sent}/{total} 封",
   "send.partialMsg": "部分发送成功",
@@ -650,6 +652,17 @@ const zh: Record<string, string> = {
   "settings.image.localStorage": "本地存储",
   "settings.image.useEnvDefault": "使用环境默认",
   "settings.image.s3CredCleared": "S3 凭证已清除",
+  "settings.image.r2": "Cloudflare R2",
+  "settings.image.r2Desc": "上传到 R2 存储桶（S3 兼容），需配置公开访问域名",
+  "settings.image.r2Config": "R2 存储桶配置",
+  "settings.image.r2AccountId": "Account ID *",
+  "settings.image.r2PublicUrl": "公开访问域名",
+  "settings.image.r2PublicUrlHint": "必填。R2 桶默认私有，需开启公开访问（r2.dev）或绑定自定义域名，否则邮件中的图片无法显示。图片 URL 用此域名拼接。",
+  "settings.image.r2Credentials": "R2 凭证",
+  "settings.image.r2CredentialsHint": "R2 API Token 生成的 S3 兼容凭证",
+  "settings.image.clearR2": "清除 R2 凭证",
+  "settings.image.r2CredCleared": "R2 凭证已清除",
+  "settings.image.r2Storage": "R2 存储",
 
   // 退订页面
   "settings.unsub.title": "退订页面默认配置",
