@@ -279,6 +279,7 @@ def send_bulk_email(
         group_name=group_name,
         group_id=group_id,
         source_email=source_email,
+        sender_name=(_user.sender_name if _user else None),
         reply_to=reply_to_email,
         total_contacts=0,
         sent_count=0,

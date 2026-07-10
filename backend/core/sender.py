@@ -36,6 +36,7 @@ class SendTask:
     recipient: str
     name: str
     source_email: str
+    sender_name: str = ""
     reply_to: str = ""
     subject_tpl: str = ""
     html_tpl: str = ""
@@ -69,6 +70,21 @@ def extract_error(err_str: str) -> str:
     if m:
         return f"[{m.group(1)}] {m.group(2)}"
     return err_str[:200]
+
+
+def format_from_address(source_email: str, sender_name: str = "") -> str:
+    """拼接 SES FromEmailAddress。有显示名时返回 "显示名 <email>"（非 ASCII 名按 RFC 2047 编码）。"""
+    name = (sender_name or "").strip()
+    if not name:
+        return source_email
+    from email.utils import formataddr
+    from email.header import Header
+    try:
+        name.encode("ascii")
+        encoded_name = name
+    except UnicodeEncodeError:
+        encoded_name = str(Header(name, "utf-8"))
+    return formataddr((encoded_name, source_email))
 
 
 def update_detail_status(task: SendTask, status: str, error: str = "", message_id: str = ""):
@@ -151,7 +167,7 @@ def send_task(task: SendTask, rate_limiter=None, log_prefix: str = "Sender") -> 
         html_body = replace_vars(task.html_tpl, task)
 
         email_params = {
-            "FromEmailAddress": task.source_email,
+            "FromEmailAddress": format_from_address(task.source_email, task.sender_name),
             "Destination": {"ToAddresses": [task.recipient]},
             "ReplyToAddresses": [task.reply_to or task.source_email],
             "Content": {
@@ -233,6 +249,7 @@ def build_send_task(detail, job, tpl, tpl_attachments, reply_to, contact_info) -
         recipient=detail.recipient,
         name=cname,
         source_email=job.source_email,
+        sender_name=getattr(job, "sender_name", "") or "",
         reply_to=reply_to,
         subject_tpl=(tpl.subject if tpl else job.template_name),
         html_tpl=(tpl.html_body if tpl else ""),
@@ -572,6 +589,7 @@ class SenderEngine:
                 recipient=detail.recipient,
                 name=cname,
                 source_email=job.source_email,
+                sender_name=getattr(job, "sender_name", "") or "",
                 reply_to=reply_to,
                 subject_tpl=subject_tpl,
                 html_tpl=html_tpl,

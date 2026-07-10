@@ -12,14 +12,22 @@ export default function UserSend() {
   const [contactEmail,setContactEmail]=useState("");
   const [editingContact,setEditingContact]=useState(false);
   const [savingContact,setSavingContact]=useState(false);
+  const [senderName,setSenderName]=useState("");
+  const [editingSender,setEditingSender]=useState(false);
+  const [savingSender,setSavingSender]=useState(false);
   const pollRef=useRef<any>(null);
 
   const loadQuota=async()=>{try{const r=await fetch(`${API}/user/daily-quota`,{headers:authH(token)});if(r.ok)setQuota(await r.json());}catch{}};
-  const loadContactEmail=async()=>{try{const r=await fetch(`${API}/auth/me`,{headers:authH(token)});if(r.ok){const d=await r.json();setContactEmail(d.contact_email||d.email||"");}}catch{}};
+  const loadContactEmail=async()=>{try{const r=await fetch(`${API}/auth/me`,{headers:authH(token)});if(r.ok){const d=await r.json();setContactEmail(d.contact_email||d.email||"");setSenderName(d.sender_name||"");}}catch{}};
   const saveContactEmail=async()=>{
     setSavingContact(true);
     try{const r=await fetch(`${API}/user/contact-email`,{method:"PUT",headers:authH(token),body:JSON.stringify({contact_email:contactEmail})});if(r.ok){toast("success","收件邮箱已更新");setEditingContact(false);}else{const e=await r.json();toast("error","更新失败",e.detail);}}catch{toast("error","网络错误");}
     finally{setSavingContact(false);}
+  };
+  const saveSenderName=async()=>{
+    setSavingSender(true);
+    try{const r=await fetch(`${API}/user/sender-name`,{method:"PUT",headers:authH(token),body:JSON.stringify({sender_name:senderName})});if(r.ok){toast("success",t("send.senderNameUpdated"));setEditingSender(false);}else{const e=await r.json();toast("error",t("common.failed"),e.detail);}}catch{toast("error",t("common.networkError"));}
+    finally{setSavingSender(false);}
   };
 
   useEffect(()=>{Promise.all([fetch(`${API}/user/templates`,{headers:authH(token)}).then(r=>r.json()),fetch(`${API}/groups`,{headers:authH(token)}).then(r=>r.json())]).then(([t,g])=>{setTs(Array.isArray(t)?t:[]);setGs(Array.isArray(g?.items)?g.items:Array.isArray(g)?g:[]);});loadQuota();loadContactEmail();},[]);
@@ -80,6 +88,20 @@ export default function UserSend() {
           </div>}
         </div>
         <p className="text-xs text-gray-400 mt-1">用于接收发送结果通知等系统邮件</p>
+      </div>
+      <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+        <div className="flex items-center justify-between">
+          <span className="text-sm text-gray-600">{t("send.senderName")}</span>
+          {!editingSender?<div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-800">{senderName||t("send.senderNameUnset")}</span>
+            <button onClick={()=>setEditingSender(true)} className="text-xs text-indigo-600 hover:text-indigo-800">{t("common.edit")}</button>
+          </div>:<div className="flex items-center gap-2">
+            <input value={senderName} onChange={e=>setSenderName(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-indigo-400 w-60"/>
+            <Btn size="sm" onClick={saveSenderName} disabled={savingSender}>{savingSender?t("common.savingMsg"):t("common.save")}</Btn>
+            <button onClick={()=>setEditingSender(false)} className="text-xs text-gray-400">{t("common.cancel")}</button>
+          </div>}
+        </div>
+        <p className="text-xs text-gray-400 mt-1">{t("send.senderNameHint")}{user.email?`：${senderName?`${senderName} <${user.email}>`:user.email}`:""}</p>
       </div>
       {quota&&<div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
         <div className="flex items-center justify-between">

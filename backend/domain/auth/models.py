@@ -12,6 +12,7 @@ class User(Base):
     display_name = Column(String(255))
     hashed_password = Column(String(255))
     email = Column(String(255))  # 发件邮箱
+    sender_name = Column(String(255), nullable=True)  # 发件人显示名（Friendly From）
     contact_email = Column(String(255), nullable=True)  # 收件邮箱（默认同发件邮箱）
     is_admin = Column(Boolean, default=False)
     is_active = Column(Boolean, default=True)

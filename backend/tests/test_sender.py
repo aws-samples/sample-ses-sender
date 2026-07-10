@@ -11,6 +11,30 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from core.sender import SenderEngine, SendTask
 
 
+class TestFormatFromAddress:
+    """Tests for core.sender.format_from_address (Friendly From)."""
+
+    def test_no_name_returns_email(self):
+        from core.sender import format_from_address
+        assert format_from_address("noreply@x.com", "") == "noreply@x.com"
+        assert format_from_address("noreply@x.com", None) == "noreply@x.com"
+
+    def test_ascii_name(self):
+        from core.sender import format_from_address
+        assert format_from_address("noreply@cooking-madness.com", "Cooking") == "Cooking <noreply@cooking-madness.com>"
+
+    def test_name_stripped(self):
+        from core.sender import format_from_address
+        assert format_from_address("a@b.com", "  Team  ") == "Team <a@b.com>"
+
+    def test_non_ascii_name_rfc2047(self):
+        from core.sender import format_from_address
+        out = format_from_address("a@b.com", "厨房")
+        # 非 ASCII 名字应被 RFC 2047 编码，且邮箱保留
+        assert "<a@b.com>" in out
+        assert "=?utf-8?" in out.lower()
+
+
 class TestReplaceVars:
     """Tests for SenderEngine._replace_vars"""
 

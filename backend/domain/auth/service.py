@@ -38,6 +38,7 @@ def create_user(db: Session, data: UserCreate) -> User:
         hashed_password=hash_password(data.password),
         email=data.email,
         contact_email=data.contact_email or data.email,
+        sender_name=data.sender_name or None,
         is_admin=data.is_admin,
         is_active=True,
         daily_send_limit=data.daily_send_limit,
@@ -55,6 +56,8 @@ def update_user(db: Session, user: User, data: UserUpdate) -> User:
         user.email = data.email
     if data.contact_email is not None:
         user.contact_email = data.contact_email
+    if data.sender_name is not None:
+        user.sender_name = data.sender_name or None
     if data.password is not None:
         user.hashed_password = hash_password(data.password)
     if data.is_active is not None:

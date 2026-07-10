@@ -112,3 +112,12 @@ def update_contact_email(data: dict, current_user: User = Depends(get_current_us
     current_user.contact_email = contact_email
     db.commit()
     return {"message": "收件邮箱已更新"}
+
+
+@router.put("/user/sender-name")
+def update_sender_name(data: dict, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """用户自己修改发件人显示名（Friendly From）。留空则只显示邮箱。"""
+    sender_name = (data.get("sender_name") or "").strip()
+    current_user.sender_name = sender_name or None
+    db.commit()
+    return {"message": "发件人显示名已更新"}
