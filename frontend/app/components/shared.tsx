@@ -103,10 +103,10 @@ export function Sidebar({menus,active,setActive,title="SES Sender"}:{menus:{id:s
 }
 
 // ===== UI Components =====
-export function Card({title,extra,children}:{title?:string;extra?:React.ReactNode;children:React.ReactNode}) {
-  return <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
+export function Card({title,extra,children,className="",bodyClassName=""}:{title?:string;extra?:React.ReactNode;children:React.ReactNode;className?:string;bodyClassName?:string}) {
+  return <div className={`bg-white rounded-2xl border border-gray-100 shadow-sm ${className}`}>
     {title&&<div className="flex items-center justify-between px-6 py-4 border-b border-gray-100"><h3 className="text-base font-semibold text-gray-800">{title}</h3>{extra}</div>}
-    <div className="p-6">{children}</div>
+    <div className={`p-6 ${bodyClassName}`}>{children}</div>
   </div>;
 }
 

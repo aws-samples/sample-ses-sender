@@ -51,6 +51,9 @@ SETTING_KEYS = [
     "unsub_page_logo",       # Logo 图片 URL
     "unsub_page_color",      # 品牌主色
     "unsub_page_button_text", # 确认退订按钮文字
+    "unsub_page_cancel_text", # 取消按钮文字
+    "unsub_page_email_label", # "退订邮箱：" 标签文字
+    "unsub_page_sender_label", # "发送方：" 标签文字
     # SSO 配置
     "sso_github_enabled",
     "sso_github_client_id",
@@ -198,6 +201,9 @@ def get_unsub_page_config(db: Session, source_email: str = None) -> dict:
         "logo": val("logo", "unsub_page_logo", ""),
         "color": val("color", "unsub_page_color", "#667eea"),
         "buttonText": val("buttonText", "unsub_page_button_text", "确认退订"),
+        "cancelText": val("cancelText", "unsub_page_cancel_text", "取消"),
+        "emailLabel": val("emailLabel", "unsub_page_email_label", "退订邮箱："),
+        "senderLabel": val("senderLabel", "unsub_page_sender_label", "发送方："),
     }
     redis_cache.set_json(cache_key, result, _CACHE_TTL)
     return result

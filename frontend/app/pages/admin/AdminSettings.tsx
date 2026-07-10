@@ -207,18 +207,18 @@ function ImageSettings() {
 
 function UnsubSettings() {
   const {token,toast,loading,saving,f,setF,save,t}=useSettings();
-  const [form,setForm]=useState({title:"",subtitle:"",success:"",logo:"",color:"",buttonText:"",reasons:DEFAULT_REASONS});
+  const [form,setForm]=useState({title:"",subtitle:"",success:"",logo:"",color:"",buttonText:"",cancelText:"",emailLabel:"",senderLabel:"",reasons:DEFAULT_REASONS});
   const [inited,setInited]=useState(false);
 
   if(!inited&&!loading&&f.unsub_page_title!==undefined){
     let reasons=DEFAULT_REASONS;
     if(f.unsub_page_reasons){try{reasons=JSON.parse(f.unsub_page_reasons);}catch{}}
-    setForm({title:f.unsub_page_title||t("unsubPage.defaultTitle"),subtitle:f.unsub_page_subtitle||"",success:f.unsub_page_success||t("unsubPage.defaultSuccess"),logo:f.unsub_page_logo||"",color:f.unsub_page_color||"#667eea",buttonText:f.unsub_page_button_text||"",reasons});
+    setForm({title:f.unsub_page_title||t("unsubPage.defaultTitle"),subtitle:f.unsub_page_subtitle||"",success:f.unsub_page_success||t("unsubPage.defaultSuccess"),logo:f.unsub_page_logo||"",color:f.unsub_page_color||"#667eea",buttonText:f.unsub_page_button_text||"",cancelText:f.unsub_page_cancel_text||"",emailLabel:f.unsub_page_email_label||"",senderLabel:f.unsub_page_sender_label||"",reasons});
     setInited(true);
   }
 
   const doSave=()=>{
-    save({unsub_page_title:form.title,unsub_page_subtitle:form.subtitle,unsub_page_success:form.success,unsub_page_logo:form.logo,unsub_page_color:form.color,unsub_page_button_text:form.buttonText,unsub_page_reasons:JSON.stringify(form.reasons)});
+    save({unsub_page_title:form.title,unsub_page_subtitle:form.subtitle,unsub_page_success:form.success,unsub_page_logo:form.logo,unsub_page_color:form.color,unsub_page_button_text:form.buttonText,unsub_page_cancel_text:form.cancelText,unsub_page_email_label:form.emailLabel,unsub_page_sender_label:form.senderLabel,unsub_page_reasons:JSON.stringify(form.reasons)});
   };
 
   if(loading) return <div className="flex items-center justify-center h-32 text-gray-400">{t("common.loading")}</div>;

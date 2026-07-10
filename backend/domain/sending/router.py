@@ -133,8 +133,8 @@ h3{{font-size:14px;color:#374151;margin-bottom:12px}}
     <h1>{cfg["title"]}</h1>
     <p class="subtitle">{cfg["subtitle"]}</p>
     <div class="email-info">
-      退订邮箱：<strong>{email}</strong><br>
-      发送方：<strong>{source_email}</strong>
+      {cfg.get("emailLabel","退订邮箱：")}<strong>{email}</strong><br>
+      {cfg.get("senderLabel","发送方：")}<strong>{source_email}</strong>
     </div>
     <h3>退订原因（可选）</h3>
     <div class="reasons">
@@ -142,7 +142,7 @@ h3{{font-size:14px;color:#374151;margin-bottom:12px}}
     </div>
     <input id="other-text" class="other-input" placeholder="请输入其他原因..." maxlength="200">
     <button class="btn btn-primary" id="confirm-btn" onclick="doUnsubscribe()">{cfg.get("buttonText","确认退订")}</button>
-    <button class="btn btn-secondary" onclick="window.close()">取消</button>
+    <button class="btn btn-secondary" onclick="window.close()">{cfg.get("cancelText","取消")}</button>
   </div>
   <div class="success" id="success-view">
     {logo_html}
