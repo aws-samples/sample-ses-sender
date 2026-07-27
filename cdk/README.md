@@ -60,6 +60,9 @@ npx cdk deploy -c region=ap-northeast-1 -c account=123456789012
 # 自定义 Configuration Set 名称
 npx cdk deploy -c configurationSetName=my-tracking
 
+# 同一账户部署多套环境，或避免与已有手工创建的 SNS/SQS 资源重名
+npx cdk deploy -c resourceNamePrefix=ses-sender-staging -c configurationSetName=ses-sender-staging-tracking
+
 # 高可用：多 AZ NAT（成本更高）
 npx cdk deploy -c natGateways=2
 
