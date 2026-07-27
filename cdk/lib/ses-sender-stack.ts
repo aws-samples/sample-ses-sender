@@ -48,6 +48,10 @@ export class SesSenderStack extends cdk.Stack {
     const account = cdk.Stack.of(this).account;
     const DB_NAME = "ses_sender";
     const DB_USER = "ses_sender";
+    // 显式命名资源使用可配置前缀，避免在已有手工环境或多套部署中发生名称冲突。
+    const resourceNamePrefix =
+      (this.node.tryGetContext("resourceNamePrefix") as string | undefined) ||
+      "ses-sender";
     // 镜像与 Fargate 运行时架构。默认 X86_64（与常见 x86 构建主机一致，免 QEMU 跨架构模拟）。
     // 如需 Graviton(ARM64) 降本，用 -c arch=arm64（要求构建主机为 ARM 或已装 QEMU/buildx）。
     const archCtx = (this.node.tryGetContext("arch") as string | undefined) || "x86_64";
@@ -171,12 +175,12 @@ export class SesSenderStack extends cdk.Stack {
     // 4. 消息层 — SNS Topic + SQS Queue（SES 事件 → SNS → SQS → 后端轮询）
     // ============================================================
     const eventDlq = new sqs.Queue(this, "EventDlq", {
-      queueName: "ses-sender-events-dlq",
+      queueName: `${resourceNamePrefix}-events-dlq`,
       retentionPeriod: Duration.days(14),
     });
 
     const eventQueue = new sqs.Queue(this, "EventQueue", {
-      queueName: "ses-sender-events-queue",
+      queueName: `${resourceNamePrefix}-events-queue`,
       receiveMessageWaitTime: Duration.seconds(20), // 长轮询
       visibilityTimeout: Duration.seconds(300),
       retentionPeriod: Duration.days(14),
@@ -185,11 +189,11 @@ export class SesSenderStack extends cdk.Stack {
 
     // ---- 发送任务队列（内部任务分发：Producer → SQS → 多实例 Consumer）----
     const sendDlq = new sqs.Queue(this, "SendDlq", {
-      queueName: "ses-sender-send-dlq",
+      queueName: `${resourceNamePrefix}-send-dlq`,
       retentionPeriod: Duration.days(14),
     });
     const sendQueue = new sqs.Queue(this, "SendQueue", {
-      queueName: "ses-sender-send-queue",
+      queueName: `${resourceNamePrefix}-send-queue`,
       receiveMessageWaitTime: Duration.seconds(20), // 长轮询
       visibilityTimeout: Duration.seconds(120),     // 略大于单封发送耗时，失败自动重投
       retentionPeriod: Duration.days(4),
@@ -197,7 +201,7 @@ export class SesSenderStack extends cdk.Stack {
     });
 
     const eventTopic = new sns.Topic(this, "EventTopic", {
-      topicName: "ses-sender-events",
+      topicName: `${resourceNamePrefix}-events`,
     });
 
     // SNS → SQS 订阅（RawMessageDelivery=false，与项目脚本一致）
@@ -477,6 +481,10 @@ export class SesSenderStack extends cdk.Stack {
         ],
       },
     });
+    // 后端启动时会立即执行数据库迁移并初始化 Redis 相关组件，因此必须等待
+    // Aurora（包括 writer 实例）和 Redis 集群完成创建。
+    backendService.node.addDependency(dbCluster);
+    backendService.node.addDependency(redis);
     dbCluster.connections.allowDefaultPortFrom(ecsSg, "app to aurora");
 
     // ---- Frontend Task Definition + Service（接 ALB，反代 backend）----
@@ -561,6 +569,9 @@ export class SesSenderStack extends cdk.Stack {
     // 注册之后再启动，否则 Envoy 拿不到 "backend" 别名 → ENOTFOUND。
     // （三个服务共用 ecsSg，无跨 SG 交叉引用，故不会成环）
     frontendService.node.addDependency(backendService);
+    // MCP 依赖后端提供业务能力，同时显式等待其基础数据服务就绪。
+    mcpService.node.addDependency(dbCluster);
+    mcpService.node.addDependency(redis);
     mcpService.node.addDependency(backendService);
 
     // ============================================================
