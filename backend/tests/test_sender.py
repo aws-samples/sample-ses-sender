@@ -1,6 +1,7 @@
 """Tests for core/sender.py — SenderEngine core logic."""
 import sys
 import os
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, mock_open
 from dataclasses import dataclass, field
 
@@ -33,6 +34,36 @@ class TestFormatFromAddress:
         # 非 ASCII 名字应被 RFC 2047 编码，且邮箱保留
         assert "<a@b.com>" in out
         assert "=?utf-8?" in out.lower()
+
+
+class TestResolveJobReplyTo:
+    """Tests for preserving the Reply-To snapshot stored on a sending job."""
+
+    def test_job_snapshot_wins_over_changed_user_contact(self):
+        from core.sender import resolve_job_reply_to
+
+        job = SimpleNamespace(
+            reply_to="snapshot@example.com",
+            source_email="sender@example.com",
+        )
+        user = SimpleNamespace(contact_email="changed@example.com")
+
+        assert resolve_job_reply_to(job, user) == "snapshot@example.com"
+
+    def test_legacy_job_falls_back_to_current_user_contact(self):
+        from core.sender import resolve_job_reply_to
+
+        job = SimpleNamespace(reply_to="", source_email="sender@example.com")
+        user = SimpleNamespace(contact_email="contact@example.com")
+
+        assert resolve_job_reply_to(job, user) == "contact@example.com"
+
+    def test_missing_user_contact_falls_back_to_source_email(self):
+        from core.sender import resolve_job_reply_to
+
+        job = SimpleNamespace(source_email="sender@example.com")
+
+        assert resolve_job_reply_to(job) == "sender@example.com"
 
 
 class TestReplaceVars:

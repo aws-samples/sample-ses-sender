@@ -87,6 +87,15 @@ def format_from_address(source_email: str, sender_name: str = "") -> str:
     return formataddr((encoded_name, source_email))
 
 
+def resolve_job_reply_to(job, job_user=None) -> str:
+    """优先使用任务创建时固化的回复地址，并兼容旧任务。"""
+    return (
+        getattr(job, "reply_to", None)
+        or (getattr(job_user, "contact_email", None) if job_user else None)
+        or job.source_email
+    )
+
+
 def update_detail_status(task: SendTask, status: str, error: str = "", message_id: str = ""):
     """更新 sending_job_details 状态（优先按 detail_id 精确更新，回退按邮箱）。"""
     try:
@@ -284,7 +293,7 @@ def load_job_send_context(db, job):
             tpl_attachments.append({"file_name": a.file_name, "file_path": a.file_path, "content_type": a.content_type})
 
     job_user = db.query(UserModel).filter(UserModel.id == job.user_id).first()
-    reply_to = (job_user.contact_email if job_user and job_user.contact_email else job.source_email) or job.source_email
+    reply_to = resolve_job_reply_to(job, job_user)
 
     job_group_id = job.group_id
     if not job_group_id:
@@ -542,7 +551,7 @@ class SenderEngine:
 
         from domain.auth.models import User as UserModel
         job_user = db.query(UserModel).filter(UserModel.id == job.user_id).first()
-        reply_to = (job_user.contact_email if job_user and job_user.contact_email else job.source_email) or job.source_email
+        reply_to = resolve_job_reply_to(job, job_user)
 
         job_group_id = job.group_id
         if not job_group_id:
