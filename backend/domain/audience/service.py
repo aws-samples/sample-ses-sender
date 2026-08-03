@@ -165,12 +165,27 @@ def upload_contacts_excel(db: Session, group_id: int, user_id: int, file: Upload
         headers = [str(cell.value or "").strip() for cell in ws[1]]
         attr_keys = headers[2:]  # columns after 姓名, 邮箱
 
-        count = 0
+        # Deduplicate both against existing group contacts and within this file.
+        # Email matching is case-insensitive while preserving the imported value.
+        seen_emails = {
+            email.casefold()
+            for (email,) in db.query(Contact.email).filter(Contact.group_id == group_id).all()
+            if email
+        }
+        contact_rows = []
+        duplicate_count = 0
+        empty_count = 0
         for row in ws.iter_rows(min_row=2, values_only=True):
             name = str(row[0] or "").strip() if row[0] else ""
             email = str(row[1] or "").strip() if len(row) > 1 and row[1] else ""
             if not email:
+                empty_count += 1
                 continue
+            email_key = email.casefold()
+            if email_key in seen_emails:
+                duplicate_count += 1
+                continue
+            seen_emails.add(email_key)
 
             # Build attributes JSON from extra columns
             attrs = {}
@@ -178,17 +193,27 @@ def upload_contacts_excel(db: Session, group_id: int, user_id: int, file: Upload
                 if key and len(row) > i + 2 and row[i + 2]:
                     attrs[key] = str(row[i + 2]).strip()
 
-            contact = Contact(
-                name=name,
-                email=email,
-                attributes=json.dumps(attrs, ensure_ascii=False) if attrs else None,
-                group_id=group_id,
-            )
-            db.add(contact)
-            count += 1
+            contact_rows.append({
+                "name": name,
+                "email": email,
+                "attributes": json.dumps(attrs, ensure_ascii=False) if attrs else None,
+                "group_id": group_id,
+            })
+        if contact_rows:
+            db.bulk_insert_mappings(Contact, contact_rows)
         db.commit()
-        return {"message": f"成功导入 {count} 个联系人"}
+        imported_count = len(contact_rows)
+        return {
+            "message": (
+                f"成功导入 {imported_count} 个联系人，"
+                f"跳过 {duplicate_count} 个重复邮箱和 {empty_count} 个空邮箱"
+            ),
+            "imported_count": imported_count,
+            "duplicate_count": duplicate_count,
+            "empty_count": empty_count,
+        }
     except Exception as e:
+        db.rollback()
         raise HTTPException(status_code=400, detail=f"文件解析失败: {str(e)}")
 
 
