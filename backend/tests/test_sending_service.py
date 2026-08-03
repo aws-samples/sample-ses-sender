@@ -59,6 +59,77 @@ class TestSendBulkEmailDedup:
         assert len(active_contacts) == 2
         assert len(skipped_contacts) == 1
 
+    def test_creates_details_for_all_contacts_across_multiple_pages(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from core.database import Base
+        from core import redis_cache
+        from domain.auth.models import User
+        from domain.audience.models import ContactGroup, Contact
+        from domain.template.models import EmailTemplate
+        from domain.sending.models import SendingJob, SendingJobDetail
+        from domain.sending.service import send_bulk_email
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        db = sessionmaker(bind=engine)()
+
+        user = User(
+            username="bulk-user",
+            hashed_password="x",
+            email="sender@example.com",
+            daily_send_limit=10000,
+        )
+        db.add(user)
+        db.flush()
+        group = ContactGroup(name="Large group", user_id=user.id)
+        db.add(group)
+        db.flush()
+        template = EmailTemplate(
+            name="Bulk template",
+            ses_name="bulk_template",
+            subject="Hello",
+            html_body="<p>Hello</p>",
+            text_body="Hello",
+            user_id=user.id,
+        )
+        db.add(template)
+        db.bulk_insert_mappings(Contact, [
+            {
+                "name": f"Contact {i}",
+                "email": f"contact-{i:04d}@example.com",
+                "group_id": group.id,
+            }
+            for i in range(5016)
+        ])
+        db.commit()
+
+        with patch.object(redis_cache, "get_int", return_value=0), \
+             patch.object(redis_cache, "incrby", return_value=5016), \
+             patch.object(redis_cache, "key_exists", return_value=False), \
+             patch.object(redis_cache, "available", return_value=False), \
+             patch("core.sender.get_engine", return_value=None):
+            result = send_bulk_email(
+                db,
+                source_email=user.email,
+                template_id=template.id,
+                group_id=group.id,
+                user_id=user.id,
+            )
+
+        job = db.query(SendingJob).filter(SendingJob.batch_id == result["batch_id"]).one()
+        detail_count = db.query(SendingJobDetail).filter(
+            SendingJobDetail.batch_id == result["batch_id"]
+        ).count()
+
+        assert result["total_contacts"] == 5016
+        assert job.total_contacts == 5016
+        assert detail_count == 5016
+
+        db.close()
+        engine.dispose()
+
 
 class TestProcessSesEvent:
     """Test SES event processing."""
@@ -185,4 +256,3 @@ class TestDailyQuotaRedis:
         si.assert_called_once()  # 回填 Redis
         assert q["today_sent"] == 120
         assert q["remaining"] == 380
-

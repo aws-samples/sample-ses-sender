@@ -264,6 +264,7 @@ def send_bulk_email(
         if redis_cache.available():
             redis_cache.replace_set(_unsub_set_key, unsub_emails, ttl=86400)
             redis_cache.setex(_unsub_loaded_key, "1", 86400)
+    unsub_email_keys = {email.casefold() for email in unsub_emails if email}
 
     # 获取用户的收件邮箱作为 reply_to
     from domain.auth.models import User as UserModel
@@ -291,8 +292,9 @@ def send_bulk_email(
     db.flush()
     job_id = job.id
 
-    # ===== 流式 + 分批 bulk insert 明细（避免全量内存 / 超大单事务）=====
-    # 用 yield_per 流式遍历联系人，按邮箱去重，分批 bulk_insert_mappings 写入。
+    # ===== 分页 + 分批 bulk insert 明细（避免全量内存 / 超大单事务）=====
+    # 按主键分页，每页完整读取后再提交。不要在 yield_per 的流式游标仍打开时
+    # commit，否则 MySQL/PyMySQL 会截断未缓冲的结果集。
     INSERT_BATCH = 2000
     seen_emails: set = set()
     active_count = 0
@@ -305,30 +307,40 @@ def send_bulk_email(
             db.commit()
             detail_rows.clear()
 
-    contact_q = (
-        db.query(Contact.email)
-        .filter(Contact.group_id == group_id)
-        .yield_per(INSERT_BATCH)
-    )
-    for (email,) in contact_q:
-        if not email or email in seen_emails:
-            continue
-        seen_emails.add(email)
-        if email in unsub_emails:
-            status = "Unsubscribed"
-            skipped_count += 1
-        else:
-            status = "Pending"
-            active_count += 1
-        detail_rows.append({
-            "job_id": job_id,
-            "batch_id": batch_id,
-            "recipient": email,
-            "send_status": status,
-        })
-        if len(detail_rows) >= INSERT_BATCH:
-            _flush_rows()
-    _flush_rows()
+    last_contact_id = 0
+    while True:
+        contact_page = (
+            db.query(Contact.id, Contact.email)
+            .filter(Contact.group_id == group_id, Contact.id > last_contact_id)
+            .order_by(Contact.id.asc())
+            .limit(INSERT_BATCH)
+            .all()
+        )
+        if not contact_page:
+            break
+
+        for contact_id, email in contact_page:
+            last_contact_id = contact_id
+            if not email:
+                continue
+            email_key = email.casefold()
+            if email_key in seen_emails:
+                continue
+            seen_emails.add(email_key)
+            if email_key in unsub_email_keys:
+                status = "Unsubscribed"
+                skipped_count += 1
+            else:
+                status = "Pending"
+                active_count += 1
+            detail_rows.append({
+                "job_id": job_id,
+                "batch_id": batch_id,
+                "recipient": email,
+                "send_status": status,
+            })
+
+        _flush_rows()
 
     # 回填真实联系人总数
     job.total_contacts = active_count + skipped_count
