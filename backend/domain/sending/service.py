@@ -49,14 +49,25 @@ def get_user_dashboard(db: Session, user_id: int) -> dict:
     ).scalar())
 
     user_batches = [r[0] for r in base.with_entities(SendingJob.batch_id).all()]
-    delivery = {"total": 0, "delivered": 0, "bounced": 0, "opened": 0, "clicked": 0, "complained": 0}
+    delivery = {"total": 0, "delivered": 0, "bounced": 0, "opened": 0, "clicked": 0,
+                "opened_bot": 0, "clicked_bot": 0, "complained": 0}
     if user_batches:
         dq = db.query(SendingJobDetail).filter(SendingJobDetail.batch_id.in_(user_batches))
         delivery["total"] = dq.count()
         delivery["delivered"] = dq.filter(SendingJobDetail.delivery_status == "Delivery").count()
         delivery["bounced"] = dq.filter(SendingJobDetail.delivery_status == "Bounce").count()
-        delivery["opened"] = dq.filter(SendingJobDetail.open_count > 0).count()
-        delivery["clicked"] = dq.filter(SendingJobDetail.click_count > 0).count()
+        # 打开/点击仅统计真人（isBotEvent=Unlikely），排除自动化系统触发
+        delivery["opened"] = dq.filter(SendingJobDetail.human_open_count > 0).count()
+        delivery["clicked"] = dq.filter(SendingJobDetail.human_click_count > 0).count()
+        # 机器人触发但无真人交互的记录，供参考
+        delivery["opened_bot"] = dq.filter(
+            SendingJobDetail.open_count > 0,
+            func.coalesce(SendingJobDetail.human_open_count, 0) == 0,
+        ).count()
+        delivery["clicked_bot"] = dq.filter(
+            SendingJobDetail.click_count > 0,
+            func.coalesce(SendingJobDetail.human_click_count, 0) == 0,
+        ).count()
         delivery["complained"] = dq.filter(SendingJobDetail.complaint_time.isnot(None)).count()
 
     daily_trend = []
@@ -617,7 +628,7 @@ def process_ses_event(event_data: dict, db: Session):
     # 查找对应的邮件明细
     detail = db.query(SendingJobDetail).filter(SendingJobDetail.message_id == message_id).first()
     if not detail:
-        logger.debug(f"[Webhook] 未找到 message_id={message_id} 的记录，跳过")
+        logger.info(f"[Webhook] 未找到 message_id={message_id} 的记录，跳过（eventType={event_type}）")
         return
 
     # 收到 SES 事件说明邮件已发出，修正可能卡住的 send_status
@@ -667,26 +678,45 @@ def process_ses_event(event_data: dict, db: Session):
         logger.info(f"[Webhook] Complaint: {detail.recipient}")
 
     elif event_type_upper == "OPEN":
+        open_info = event_data.get("open", {})
+        # SES 2026-08 新增 isBotEvent: "Likely"（机器人）/ "Unlikely"（真人）
+        raw_bot = open_info.get("isBotEvent", "")
+        is_bot = str(raw_bot).lower() == "likely"
         detail.open_count = (detail.open_count or 0) + 1
-        if not detail.first_open_time:
-            open_info = event_data.get("open", {})
-            ts = open_info.get("timestamp")
-            try:
-                detail.first_open_time = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else datetime.utcnow()
-            except Exception:
-                detail.first_open_time = datetime.utcnow()
-        logger.info(f"[Webhook] Open: {detail.recipient} (count={detail.open_count})")
+        detail.last_open_is_bot = is_bot
+        if not is_bot:
+            detail.human_open_count = (detail.human_open_count or 0) + 1
+            if not detail.first_open_time:
+                ts = open_info.get("timestamp")
+                try:
+                    detail.first_open_time = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else datetime.utcnow()
+                except Exception:
+                    detail.first_open_time = datetime.utcnow()
+        logger.info(
+            f"[Webhook] Open: {detail.recipient} "
+            f"(total={detail.open_count}, human={detail.human_open_count}, "
+            f"isBotEvent={raw_bot!r} -> bot={is_bot})"
+        )
 
     elif event_type_upper == "CLICK":
+        click_info = event_data.get("click", {})
+        raw_bot = click_info.get("isBotEvent", "")
+        is_bot = str(raw_bot).lower() == "likely"
         detail.click_count = (detail.click_count or 0) + 1
-        if not detail.first_click_time:
-            click_info = event_data.get("click", {})
-            ts = click_info.get("timestamp")
-            try:
-                detail.first_click_time = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else datetime.utcnow()
-            except Exception:
-                detail.first_click_time = datetime.utcnow()
-        logger.info(f"[Webhook] Click: {detail.recipient} (count={detail.click_count})")
+        detail.last_click_is_bot = is_bot
+        if not is_bot:
+            detail.human_click_count = (detail.human_click_count or 0) + 1
+            if not detail.first_click_time:
+                ts = click_info.get("timestamp")
+                try:
+                    detail.first_click_time = datetime.fromisoformat(ts.replace("Z", "+00:00")) if ts else datetime.utcnow()
+                except Exception:
+                    detail.first_click_time = datetime.utcnow()
+        logger.info(
+            f"[Webhook] Click: {detail.recipient} "
+            f"(total={detail.click_count}, human={detail.human_click_count}, "
+            f"isBotEvent={raw_bot!r} -> bot={is_bot})"
+        )
 
     elif event_type_upper == "REJECT":
         detail.delivery_status = "Reject"
@@ -807,7 +837,7 @@ def export_email_details(
     wb = Workbook()
     ws = wb.active
     ws.title = "邮件明细"
-    headers = ["收件人", "批次ID", "模版", "客群", "发送邮箱", "发送状态", "送达状态", "退信类型", "打开次数", "点击次数", "送达时间", "首次打开", "首次点击", "投诉时间"]
+    headers = ["收件人", "批次ID", "模版", "客群", "发送邮箱", "发送状态", "送达状态", "退信类型", "打开次数", "真人打开", "点击次数", "真人点击", "送达时间", "首次打开", "首次点击", "投诉时间"]
     ws.append(headers)
 
     for d in items:
@@ -822,7 +852,9 @@ def export_email_details(
             d.delivery_status or "",
             d.bounce_type or "",
             d.open_count or 0,
+            d.human_open_count or 0,
             d.click_count or 0,
+            d.human_click_count or 0,
             d.delivery_time.strftime("%Y-%m-%d %H:%M:%S") if d.delivery_time else "",
             d.first_open_time.strftime("%Y-%m-%d %H:%M:%S") if d.first_open_time else "",
             d.first_click_time.strftime("%Y-%m-%d %H:%M:%S") if d.first_click_time else "",

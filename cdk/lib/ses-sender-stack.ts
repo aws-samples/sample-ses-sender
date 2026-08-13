@@ -439,6 +439,7 @@ export class SesSenderStack extends cdk.Stack {
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: "backend", logGroup }),
       environment: {
         AWS_REGION: region,
+        PYTHONUNBUFFERED: "1",
         SES_CONFIGURATION_SET: props.configurationSetName,
         SQS_QUEUE_URL: eventQueue.queueUrl,
         UNSUBSCRIBE_BASE_URL: `${publicUrl}/api`,
@@ -475,6 +476,7 @@ export class SesSenderStack extends cdk.Stack {
       assignPublicIp,
       vpcSubnets: workloadSubnets,
       securityGroups: [ecsSg],
+      enableExecuteCommand: true,
       serviceConnectConfiguration: {
         services: [
           { portMappingName: "backend", dnsName: "backend", port: 8000 },

@@ -1,5 +1,6 @@
 from pydantic import BaseModel
-from typing import Optional
+from datetime import datetime
+from typing import List, Optional
 
 
 class LoginRequest(BaseModel):
@@ -43,3 +44,24 @@ class UserOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ApiKeyCreate(BaseModel):
+    name: str
+    scopes: List[str]
+    expires_at: Optional[datetime] = None
+
+
+class ApiKeyOut(BaseModel):
+    id: int
+    name: str
+    key_prefix: str
+    scopes: List[str]
+    expires_at: Optional[datetime] = None
+    last_used_at: Optional[datetime] = None
+    revoked_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class ApiKeyCreated(ApiKeyOut):
+    api_key: str

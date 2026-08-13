@@ -44,9 +44,13 @@ class SendingJobDetail(Base):
     bounce_type = Column(String(64), nullable=True)             # Permanent / Transient
     bounce_subtype = Column(String(64), nullable=True)          # General / NoEmail / Suppressed ...
     bounce_message = Column(Text, nullable=True)
-    open_count = Column(Integer, default=0)                     # 打开次数
+    open_count = Column(Integer, default=0)                     # 打开次数（含机器人）
+    human_open_count = Column(Integer, default=0)               # 真人打开次数（isBotEvent=Unlikely）
+    last_open_is_bot = Column(Boolean, nullable=True)          # 最近一次打开是否机器人触发
     first_open_time = Column(DateTime, nullable=True)
-    click_count = Column(Integer, default=0)                    # 点击次数
+    click_count = Column(Integer, default=0)                    # 点击次数（含机器人）
+    human_click_count = Column(Integer, default=0)             # 真人点击次数（isBotEvent=Unlikely）
+    last_click_is_bot = Column(Boolean, nullable=True)         # 最近一次点击是否机器人触发
     first_click_time = Column(DateTime, nullable=True)
     complaint_time = Column(DateTime, nullable=True)            # 投诉时间
     created_at = Column(DateTime, default=datetime.utcnow)

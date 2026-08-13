@@ -32,6 +32,7 @@ from domain.sending import models as _sending_models    # noqa: F401
 
 # 导入各域路由
 from domain.auth.router import router as auth_router
+from domain.auth.api_keys import router as api_keys_router
 from domain.identity.router import router as identity_router
 from domain.template.router import router as template_router
 from domain.audience.router import router as audience_router
@@ -195,6 +196,7 @@ async def upload_image(file: UploadFile = File(...), current_user=Depends(get_cu
 
 # --- 注册各业务域路由 ---
 app.include_router(auth_router)
+app.include_router(api_keys_router)
 app.include_router(identity_router)
 app.include_router(template_router)
 app.include_router(audience_router)
@@ -251,7 +253,7 @@ def _sqs_polling_worker():
                         try:
                             event_data = _json.loads(message_content)
                         except (_json.JSONDecodeError, TypeError):
-                            _sqs_logger.debug(f"[SQS Worker] 跳过非 SES 事件消息: {str(message_content)[:100]}")
+                            _sqs_logger.info(f"[SQS Worker] 跳过非 SES 事件消息: {str(message_content)[:100]}")
                             # 删除该消息，避免重复处理
                             sqs_client.delete_message(QueueUrl=SQS_QUEUE_URL, ReceiptHandle=msg["ReceiptHandle"])
                             continue

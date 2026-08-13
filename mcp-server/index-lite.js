@@ -15,10 +15,12 @@ import { z } from "zod";
 
 const BASE_URL = process.env.SES_SENDER_URL || "http://localhost:3000/api";
 let AUTH_TOKEN = "";
+let USER_API_KEY = process.env.SES_API_KEY || "";
 
 async function api(method, path, body) {
   const headers = { "Content-Type": "application/json" };
-  if (AUTH_TOKEN) headers["Authorization"] = `Bearer ${AUTH_TOKEN}`;
+  const token = USER_API_KEY || AUTH_TOKEN;
+  if (token) headers["Authorization"] = `Bearer ${token}`;
   const opts = { method, headers };
   if (body && method !== "GET") opts.body = JSON.stringify(body);
   const res = await fetch(`${BASE_URL}${path}`, opts);
@@ -29,6 +31,7 @@ async function api(method, path, body) {
 
 const ACTIONS = {
   // 认证与个人
+  authenticate:       { method: "GET",  path: "/auth/me",             desc: "使用用户 API Key 认证" },
   login:              { method: "POST", path: "/auth/login",          desc: "登录" },
   me:                 { method: "GET",  path: "/auth/me",             desc: "当前用户信息" },
   set_contact_email:  { method: "PUT",  path: "/user/contact-email",  desc: "修改收件邮箱" },
@@ -109,6 +112,8 @@ server.tool(
     if (!act) {
       return { content: [{ type: "text", text: `未知操作: ${action}\n可用操作: ${Object.entries(ACTIONS).map(([k,v]) => `${k}(${v.desc})`).join(", ")}` }] };
     }
+    const authenticationKey = action === "authenticate" ? params.api_key : undefined;
+    if (action === "authenticate") params = {};
 
     let path = act.path;
     for (const [key, val] of Object.entries(params)) {
@@ -128,6 +133,19 @@ server.tool(
 
     const body = act.method !== "GET" ? params : undefined;
 
+    if (action === "authenticate") {
+      if (!authenticationKey || !String(authenticationKey).startsWith("ses_")) {
+        throw new Error("需要有效的用户 API Key（ses_ 前缀）");
+      }
+      USER_API_KEY = String(authenticationKey);
+      try {
+        const data = await api("GET", path);
+        return { content: [{ type: "text", text: `认证成功！${data.display_name}（${data.is_admin ? "管理员" : "用户"}）` }] };
+      } catch (error) {
+        USER_API_KEY = "";
+        throw error;
+      }
+    }
     if (action === "login") {
       const data = await api("POST", path, body);
       AUTH_TOKEN = data.access_token;

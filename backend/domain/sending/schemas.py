@@ -48,8 +48,12 @@ class SendingJobDetailOut(BaseModel):
     bounce_subtype: Optional[str] = None
     bounce_message: Optional[str] = None
     open_count: int = 0
+    human_open_count: int = 0
+    last_open_is_bot: Optional[bool] = None
     first_open_time: Optional[datetime] = None
     click_count: int = 0
+    human_click_count: int = 0
+    last_click_is_bot: Optional[bool] = None
     first_click_time: Optional[datetime] = None
     complaint_time: Optional[datetime] = None
     created_at: Optional[datetime] = None

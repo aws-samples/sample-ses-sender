@@ -38,8 +38,8 @@ export default function UserDashboard() {
 
   const deliveryCards=[
     {label:t("dashboard.deliveryRate"),value:`${pct(d.delivered,d.total)}%`,count:d.delivered,color:"#10B981",bg:"bg-green-50",ring:"ring-green-200"},
-    {label:t("dashboard.openRate"),value:`${pct(d.opened,d.total)}%`,count:d.opened,color:"#3B82F6",bg:"bg-blue-50",ring:"ring-blue-200"},
-    {label:t("dashboard.clickRate"),value:`${pct(d.clicked,d.total)}%`,count:d.clicked,color:"#8B5CF6",bg:"bg-purple-50",ring:"ring-purple-200"},
+    {label:t("dashboard.openRate"),value:`${pct(d.opened,d.total)}%`,count:d.opened,color:"#3B82F6",bg:"bg-blue-50",ring:"ring-blue-200",bot:d.opened_bot||0},
+    {label:t("dashboard.clickRate"),value:`${pct(d.clicked,d.total)}%`,count:d.clicked,color:"#8B5CF6",bg:"bg-purple-50",ring:"ring-purple-200",bot:d.clicked_bot||0},
     {label:t("dashboard.bounceRate"),value:`${pct(d.bounced,d.total)}%`,count:d.bounced,color:"#EF4444",bg:"bg-red-50",ring:"ring-red-200"},
     {label:t("dashboard.complaintRate"),value:`${pct(d.complained,d.total)}%`,count:d.complained,color:"#F59E0B",bg:"bg-amber-50",ring:"ring-amber-200"},
   ];
@@ -90,8 +90,9 @@ export default function UserDashboard() {
       </Card>
 
       <Card title={`${t("dashboard.deliveryMetrics")}${d.total>0?` (${t("dashboard.deliveryTotal",{count:d.total})})`:""}`}>
+        <p className="text-xs text-gray-400 mb-2">{t("dashboard.humanMetricHint")}</p>
         <div className="space-y-3">
-          {deliveryCards.map(c=>{
+          {deliveryCards.map((c:any)=>{
             const pctVal=d.total>0?(c.count/d.total*100):0;
             return <div key={c.label} className="flex items-center gap-3">
               <span className="text-sm text-gray-600 w-14">{c.label}</span>
@@ -99,7 +100,10 @@ export default function UserDashboard() {
                 <div className="h-full rounded-full transition-all" style={{width:`${pctVal}%`,background:c.color}}/>
               </div>
               <span className="text-sm font-semibold w-16 text-right" style={{color:c.color}}>{c.value}</span>
-              <span className="text-xs text-gray-400 w-10 text-right">{c.count}</span>
+              <span className="text-xs text-gray-400 w-14 text-right">
+                {c.count}
+                {c.bot>0&&<span className="ml-1 text-gray-300" title={t("dashboard.botCountHint",{count:c.bot})}>🤖{c.bot}</span>}
+              </span>
             </div>;
           })}
         </div>

@@ -124,8 +124,8 @@ export default function EmailDetails() {
             <th className="py-2 px-3 font-medium">{t("details.group")}</th>
             <th className="py-2 px-3 font-medium">{t("details.sendStatus")}</th>
             <th className="py-2 px-3 font-medium">{t("details.deliveryStatus")}</th>
-            <th className="py-2 px-3 font-medium">{t("details.openCount")}</th>
-            <th className="py-2 px-3 font-medium">{t("details.clickCount")}</th>
+            <th className="py-2 px-3 font-medium" title={t("details.humanHint")}>{t("details.openCount")}</th>
+            <th className="py-2 px-3 font-medium" title={t("details.humanHint")}>{t("details.clickCount")}</th>
             <th className="py-2 px-3 font-medium">{t("details.deliveryTime")}</th>
             <th className="py-2 px-3 font-medium">{t("details.openTime")}</th>
           </tr></thead>
@@ -136,8 +136,16 @@ export default function EmailDetails() {
             <td className="py-2.5 px-3 text-xs text-gray-600">{d.group_name||"—"}</td>
             <td className="py-2.5 px-3"><span title={d.send_error||""}>{sendBadge(d.send_status)}{d.send_error&&<span className="ml-1 text-red-400 cursor-help" title={d.send_error}>⚠</span>}</span></td>
             <td className="py-2.5 px-3">{delivBadge(d.delivery_status)}</td>
-            <td className="py-2.5 px-3 text-center">{d.open_count>0?<span className="text-green-600 font-medium">{t("details.times",{count:d.open_count})}</span>:<span className="text-gray-300">—</span>}</td>
-            <td className="py-2.5 px-3 text-center">{d.click_count>0?<span className="text-blue-600 font-medium">{t("details.times",{count:d.click_count})}</span>:<span className="text-gray-300">—</span>}</td>
+            <td className="py-2.5 px-3 text-center">{d.open_count>0
+              ?(d.human_open_count>0
+                ? <span className="inline-flex items-center gap-1"><span className="text-green-600 font-medium" title={t("details.humanHint")}>👤 {t("details.times",{count:d.human_open_count})}</span>{d.open_count>d.human_open_count&&<span className="text-[10px] text-gray-400" title={t("details.botHint")}>🤖{d.open_count-d.human_open_count}</span>}</span>
+                : <span className="text-gray-400 text-xs" title={t("details.botOnlyHint")}>🤖 {t("details.botOnly")}</span>)
+              :<span className="text-gray-300">—</span>}</td>
+            <td className="py-2.5 px-3 text-center">{d.click_count>0
+              ?(d.human_click_count>0
+                ? <span className="inline-flex items-center gap-1"><span className="text-blue-600 font-medium" title={t("details.humanHint")}>👤 {t("details.times",{count:d.human_click_count})}</span>{d.click_count>d.human_click_count&&<span className="text-[10px] text-gray-400" title={t("details.botHint")}>🤖{d.click_count-d.human_click_count}</span>}</span>
+                : <span className="text-gray-400 text-xs" title={t("details.botOnlyHint")}>🤖 {t("details.botOnly")}</span>)
+              :<span className="text-gray-300">—</span>}</td>
             <td className="py-2.5 px-3 text-xs text-gray-500">{fmtTime(d.delivery_time)}</td>
             <td className="py-2.5 px-3 text-xs text-gray-500">{fmtTime(d.first_open_time)}</td>
           </tr>)}</tbody>

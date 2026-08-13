@@ -215,6 +215,121 @@ class TestProcessSesEvent:
         db.commit.assert_not_called()
 
 
+class TestBotEventTracking:
+    """SES isBotEvent（2026-08）：区分真人与自动化系统触发的 Open/Click。"""
+
+    def _make_detail(self):
+        d = MagicMock()
+        d.send_status = "Success"
+        d.delivery_status = None
+        d.message_id = "msg-bot"
+        d.open_count = 0
+        d.human_open_count = 0
+        d.first_open_time = None
+        d.click_count = 0
+        d.human_click_count = 0
+        d.first_click_time = None
+        return d
+
+    def test_human_open_counts_as_human(self):
+        from domain.sending.service import process_ses_event
+
+        db = MagicMock()
+        detail = self._make_detail()
+        db.query.return_value.filter.return_value.first.return_value = detail
+
+        event_data = {
+            "eventType": "Open",
+            "mail": {"messageId": "msg-bot"},
+            "open": {"timestamp": "2026-08-12T10:00:00Z", "isBotEvent": "Unlikely"},
+        }
+        process_ses_event(event_data, db)
+
+        assert detail.open_count == 1
+        assert detail.human_open_count == 1
+        assert detail.last_open_is_bot is False
+        assert detail.first_open_time is not None
+        db.commit.assert_called()
+
+    def test_bot_open_not_counted_as_human(self):
+        from domain.sending.service import process_ses_event
+
+        db = MagicMock()
+        detail = self._make_detail()
+        db.query.return_value.filter.return_value.first.return_value = detail
+
+        event_data = {
+            "eventType": "Open",
+            "mail": {"messageId": "msg-bot"},
+            "open": {"timestamp": "2026-08-12T10:00:00Z", "isBotEvent": "Likely"},
+        }
+        process_ses_event(event_data, db)
+
+        assert detail.open_count == 1
+        assert detail.human_open_count == 0
+        assert detail.last_open_is_bot is True
+        # 机器人事件不记录首次真人打开时间
+        assert detail.first_open_time is None
+
+    def test_human_click_counts_as_human(self):
+        from domain.sending.service import process_ses_event
+
+        db = MagicMock()
+        detail = self._make_detail()
+        db.query.return_value.filter.return_value.first.return_value = detail
+
+        event_data = {
+            "eventType": "Click",
+            "mail": {"messageId": "msg-bot"},
+            "click": {"timestamp": "2026-08-12T10:00:00Z", "isBotEvent": "Unlikely"},
+        }
+        process_ses_event(event_data, db)
+
+        assert detail.click_count == 1
+        assert detail.human_click_count == 1
+        assert detail.last_click_is_bot is False
+        assert detail.first_click_time is not None
+
+    def test_bot_click_not_counted_as_human(self):
+        from domain.sending.service import process_ses_event
+
+        db = MagicMock()
+        detail = self._make_detail()
+        db.query.return_value.filter.return_value.first.return_value = detail
+
+        event_data = {
+            "eventType": "Click",
+            "mail": {"messageId": "msg-bot"},
+            "click": {"timestamp": "2026-08-12T10:00:00Z", "isBotEvent": "Likely"},
+        }
+        process_ses_event(event_data, db)
+
+        assert detail.click_count == 1
+        assert detail.human_click_count == 0
+        assert detail.last_click_is_bot is True
+        assert detail.first_click_time is None
+
+    def test_missing_isbotevent_defaults_to_human(self):
+        """老账户或字段缺失时，默认按真人处理（向后兼容）。"""
+        from domain.sending.service import process_ses_event
+
+        db = MagicMock()
+        detail = self._make_detail()
+        db.query.return_value.filter.return_value.first.return_value = detail
+
+        event_data = {
+            "eventType": "Open",
+            "mail": {"messageId": "msg-bot"},
+            "open": {"timestamp": "2026-08-12T10:00:00Z"},
+        }
+        process_ses_event(event_data, db)
+
+        assert detail.open_count == 1
+        assert detail.human_open_count == 1
+        assert detail.last_open_is_bot is False
+
+
+
 class TestDailyQuotaRedis:
     """每日配额 Redis 计数器：命中缓存直接用，未命中回退 DB 并回填。"""
 
