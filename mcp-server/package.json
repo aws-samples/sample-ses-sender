@@ -8,7 +8,7 @@
     "ses-sender-mcp": "./index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "cors": "^2.8.6",
     "express": "^5.2.1"
   }
