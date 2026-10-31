@@ -23,6 +23,7 @@ from alembic.runtime.migration import MigrationContext
 
 from core.database import engine, SessionLocal
 from domain.auth.service import init_default_admin
+from core.ses_suppression import lifespan as ses_suppression_lifespan
 
 # 导入所有 models，确保 Alembic 能发现它们
 from domain.auth import models as _auth_models        # noqa: F401
@@ -105,6 +106,7 @@ app = FastAPI(
     title="SES Sender API",
     description="前后端分离的 AWS SES 邮件发送管理平台",
     version="2.0.0",
+    lifespan=ses_suppression_lifespan,
 )
 
 app.add_middleware(

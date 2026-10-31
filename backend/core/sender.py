@@ -136,12 +136,19 @@ def update_detail_status(task: SendTask, status: str, error: str = "", message_i
 
 
 def send_task(task: SendTask, rate_limiter=None, log_prefix: str = "Sender") -> str:
-    """发送单封邮件的共享主体。返回 'success' / 'skipped' / 'failed'。
+    """发送单封邮件的共享主体。返回 'success' / 'skipped' / 'failed' / 'deferred'。
 
     rate_limiter: 可选，发送前 acquire 一个全局令牌（多实例限流）。
     """
-    from core.ses import sesv2_client
     from core import blacklist as _bl
+
+    # The first complete AWS snapshot is the authority boundary. Keep the detail
+    # pending so queue workers can retry after the background sync succeeds.
+    if not _bl.suppression_ready():
+        logger.warning(f"[{log_prefix}] SES 抑制名单首次同步尚未完成，延后发送")
+        return "deferred"
+
+    from core.ses import sesv2_client
     from core.database import SessionLocal
     from domain.sending.models import SendingJobDetail
 
@@ -454,7 +461,11 @@ class SenderEngine:
                 last_reset = time.monotonic()
 
             num_msg += 1
-            self._send_one(task, worker_id)
+            while self.running:
+                result = self._send_one(task, worker_id)
+                if result != "deferred":
+                    break
+                time.sleep(1)  # nosemgrep: arbitrary-sleep
 
         logger.info(f"[Worker-{worker_id}] 已退出")
 
@@ -470,6 +481,7 @@ class SenderEngine:
                 self._total_sent += 1
             elif result == "failed":
                 self._total_errors += 1
+        return result
 
     def _replace_vars(self, template: str, task: SendTask) -> str:
         return replace_vars(template, task)
@@ -621,6 +633,10 @@ class SenderEngine:
         return (len(page_ids) >= limit, enqueued)
 
     def _process_queued_jobs(self):
+        from core import blacklist
+        if not blacklist.suppression_ready():
+            return
+
         from core.database import SessionLocal
         from domain.sending.models import SendingJob, SendingJobDetail
         from core.config import SES_CONFIGURATION_SET

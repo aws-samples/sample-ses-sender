@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, UniqueConstraint, Index
 from core.database import Base
 
 
@@ -29,6 +29,7 @@ class SendingJob(Base):
 class SendingJobDetail(Base):
     """每封邮件的发送明细 + 事件追踪"""
     __tablename__ = "sending_job_details"
+    __table_args__ = (Index("ix_sending_details_recipient_job", "recipient", "job_id"),)
 
     id = Column(Integer, primary_key=True, index=True)
     job_id = Column(Integer, index=True)                        # 关联 sending_jobs.id
@@ -76,6 +77,29 @@ class EmailBlacklist(Base):
     reason = Column(String(500), default="")
     created_by = Column(String(100), default="admin")
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SesSuppressedDestination(Base):
+    """SES 账户级抑制名单的区域快照，与人工黑名单独立保存。"""
+    __tablename__ = "ses_suppressed_destinations"
+    __table_args__ = (UniqueConstraint("region", "email", name="uq_ses_suppressed_region_email"),)
+
+    id = Column(Integer, primary_key=True)
+    region = Column(String(64), nullable=False)
+    email = Column(String(255), nullable=False)
+    reason = Column(String(32), nullable=False)  # BOUNCE / COMPLAINT
+    last_update_time = Column(DateTime, nullable=False)  # naive UTC
+
+
+class SesSuppressionSyncState(Base):
+    """最近一次完整同步结果，用于识别未同步及过期的快照。"""
+    __tablename__ = "ses_suppression_sync_state"
+
+    region = Column(String(64), primary_key=True)
+    version = Column(Integer, nullable=False, default=0, server_default="0")
+    last_success_at = Column(DateTime, nullable=True)
+    last_attempt_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
 
 
 class ScheduledJob(Base):

@@ -158,6 +158,34 @@ def replace_set(key: str, members, ttl: int = 0):
         _warn(f"replace_set({key}) 失败", e)
 
 
+_REPLACE_VERSIONED_SET = """
+local previous = redis.call('GET', KEYS[2])
+if previous and tonumber(previous) > tonumber(ARGV[1]) then return 0 end
+redis.call('DEL', KEYS[1])
+for first = 2, #ARGV, 500 do
+    redis.call('SADD', KEYS[1], unpack(ARGV, first, math.min(first + 499, #ARGV)))
+end
+redis.call('SET', KEYS[2], ARGV[1])
+return 1
+"""
+
+
+def replace_versioned_set(key: str, members, version: int):
+    """Atomically publish a DB snapshot without overwriting a newer version.
+
+    Callers supply a sentinel member for an authoritative empty snapshot.
+    None means Redis is unavailable; False means a newer snapshot already won.
+    """
+    c = _get_client()
+    if c is None:
+        return None
+    try:
+        return bool(c.eval(_REPLACE_VERSIONED_SET, 2, key, key + ":version", version, *members))
+    except Exception as e:
+        _warn(f"replace_versioned_set({key}) 失败", e)
+        return None
+
+
 def smembers(key: str):
     """返回 Set 全部成员（set）。key 不存在返回空 set，Redis 不可用返回 None。"""
     c = _get_client()

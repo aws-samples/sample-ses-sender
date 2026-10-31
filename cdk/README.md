@@ -80,6 +80,14 @@ npx cdk deploy -c bedrockModelId=global.anthropic.claude-opus-4-6-v1
 
 > 退订链接 `UNSUBSCRIBE_BASE_URL` 已自动设为 `<CloudFront 域名>/api`，邮件中的一键退订（RFC 8058）开箱即用。
 
+## SES 抑制名单自动同步
+
+CDK 为后端任务配置 `ENABLE_SES_SUPPRESSION_SYNC=true`、`SES_SUPPRESSION_SYNC_INTERVAL_SECONDS=300`，并向任务角色授予只读权限 `ses:ListSuppressedDestinations`。后端启动后立即拉取本部署 AWS 账户及区域的 **SES 账户级抑制名单**，之后默认每 5 分钟同步；不跨账户、区域，不读取 SES 全局抑制名单，也不修改 AWS 抑制记录或设置。
+
+启动时 Alembic 自动创建独立的名单快照和同步状态表。全部分页成功后，才在一个事务中更新快照，并清理 SES 端已移除的记录；同步失败保留上次快照，管理员维护的人工黑名单不受影响。联系人列表同时展示人工黑名单、SES 退信/投诉抑制、按当前账号发件邮箱判断的退订状态，并提示未完成或失败的同步。批量与定时发送也会过滤本地已同步的抑制名单。
+
+已有部署升级需要同时更新后端镜像、任务环境变量和 IAM 任务角色。使用自管 Docker Compose / EC2 时，需自行为运行角色补充 `ses:ListSuppressedDestinations` 权限；无需授予 AWS 抑制名单写入或删除权限。
+
 ## 与本地 docker-compose 的关系
 
 - 本地开发/试用：仓库根目录 `docker-compose up -d --build`（MySQL 容器 + 单机）。
