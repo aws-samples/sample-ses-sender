@@ -54,3 +54,56 @@ class TestCreateContact:
         with pytest.raises(HTTPException) as exc_info:
             create_contact(db, data, user_id=1)
         assert exc_info.value.status_code == 404
+
+
+class TestUploadContactsExcel:
+    def test_deduplicates_file_and_existing_group_case_insensitively(self):
+        import io
+        import openpyxl
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from core.database import Base
+        from domain.auth.models import User
+        from domain.audience.models import ContactGroup, Contact
+        from domain.audience.service import upload_contacts_excel
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        db = sessionmaker(bind=engine)()
+
+        user = User(username="import-user", hashed_password="x", email="sender@example.com")
+        db.add(user)
+        db.flush()
+        group = ContactGroup(name="Import group", user_id=user.id)
+        db.add(group)
+        db.flush()
+        db.add(Contact(name="Existing", email="Existing@Example.com", group_id=group.id))
+        db.commit()
+
+        workbook = openpyxl.Workbook()
+        sheet = workbook.active
+        sheet.append(["姓名", "邮箱", "company"])
+        sheet.append(["Existing duplicate", "existing@example.com", "Old"])
+        sheet.append(["New one", "new@example.com", "Acme"])
+        sheet.append(["New duplicate", "NEW@example.com", "Acme"])
+        sheet.append(["Empty", "", "Acme"])
+        sheet.append(["New two", "second@example.com", "Tech"])
+        content = io.BytesIO()
+        workbook.save(content)
+        content.seek(0)
+        upload = MagicMock()
+        upload.file = content
+
+        result = upload_contacts_excel(db, group.id, user.id, upload)
+
+        assert result["imported_count"] == 2
+        assert result["duplicate_count"] == 2
+        assert result["empty_count"] == 1
+        assert db.query(Contact).filter(Contact.group_id == group.id).count() == 3
+        assert {
+            contact.email for contact in db.query(Contact).filter(Contact.group_id == group.id).all()
+        } == {"Existing@Example.com", "new@example.com", "second@example.com"}
+
+        db.close()
+        engine.dispose()

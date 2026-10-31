@@ -81,9 +81,14 @@ claude mcp add --transport http ses-sender http://your-server:8808/mcp --header 
 
 > 将 `your-server` 替换为实际服务器 IP 或域名，`sk-ses-mcp-2026` 替换为 `.env` 中配置的 `MCP_API_KEY` 值。
 
-### API Key 认证
+### 双层 API Key 认证
 
-MCP Server 通过 `MCP_API_KEY` 环境变量启用访问控制：
+Remote MCP 使用两个相互独立的 Key：
+
+- `MCP_API_KEY` 保护 MCP HTTP 入口，不代表业务用户。
+- 用户 API Key（`ses_live_...`）决定 SES Sender 用户身份和 scopes。
+
+通过环境变量启用 MCP 网关访问控制：
 
 ```bash
 # .env 文件
@@ -95,13 +100,43 @@ MCP_API_KEY=sk-ses-mcp-2026
 | `MCP_API_KEY` 有值 | 所有 `/mcp` 请求必须携带 API Key |
 | `MCP_API_KEY` 为空 | 开放访问，无需认证（仅限开发环境） |
 
-支持三种传递 Key 的方式：
+网关 Key 推荐使用 `x-api-key`，用户 Key 推荐使用 `x-ses-api-key`：
 
-| 方式 | 示例 |
-|------|------|
-| `x-api-key` 头 | `x-api-key: sk-ses-mcp-2026` |
-| `Authorization` 头 | `Authorization: Bearer sk-ses-mcp-2026` |
-| URL 参数 | `?key=sk-ses-mcp-2026` |
+```json
+{
+  "headers": {
+    "x-api-key": "sk-ses-mcp-2026",
+    "x-ses-api-key": "ses_live_user_key"
+  }
+}
+```
+
+也可以连接后调用 `ses` 工具的 `authenticate` action：
+
+```json
+{"action":"authenticate","params":"{\"api_key\":\"ses_live_user_key\"}"}
+```
+
+stdio 精简模式可以设置 `SES_API_KEY=ses_live_user_key`。
+
+#### 签发用户 API Key
+
+以下接口只接受网页登录 JWT，API Key 不能签发更多 Key。明文 Key 只在创建响应中出现一次：
+
+```bash
+curl -X POST https://your-server/api/user/api-keys \
+  -H "Authorization: Bearer WEB_LOGIN_JWT" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Claude MCP","scopes":["profile:read","audience:read","templates:read","ai:use","sending:read","sending:write"]}'
+```
+
+- `GET /user/api-keys`：查看 Key 列表，不返回明文
+- `POST /user/api-keys`：签发 Key
+- `DELETE /user/api-keys/{id}`：撤销 Key
+
+可用 scopes：`profile:read/write`、`audience:read/write`、`templates:read/write`、
+`ai:use`、`sending:read/write`、`scheduled:read/write`、`unsubscribe:read/write`、
+`admin:read/write`。只有管理员能够签发 `admin:*`。
 
 `/health` 端点无需认证，可用于监控检查。
 ```
@@ -186,14 +221,16 @@ SES_SENDER_URL=http://your-server:3000/api claude mcp add ses-sender -- node /pa
 | 变量 | 默认值 | 说明 |
 |------|-------|------|
 | `SES_SENDER_URL` | `http://localhost:3000/api` | SES Sender 后端 API 地址 |
+| `SES_API_KEY` | 空 | stdio 或单用户 Remote MCP 默认使用的用户 API Key |
+| `MCP_API_KEY` | 空 | Remote MCP HTTP 入口的网关 Key |
 
 ## 使用示例
 
 配置好 MCP 后，可以直接用自然语言与 AI 对话：
 
 ```
-用户: 登录邮件系统，用户名 admin，密码 admin123
-AI: [调用 login] 登录成功！欢迎管理员...
+用户: 使用我的 SES API Key 认证
+AI: [调用 authenticate] 认证成功
 
 用户: 今天发了多少邮件
 AI: [调用 get_dashboard] 📊 今日发送 256 / 1000...

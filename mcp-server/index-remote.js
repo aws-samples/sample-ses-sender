@@ -17,12 +17,14 @@ import { z } from "zod";
 const BASE_URL = process.env.SES_SENDER_URL || "http://localhost:3000/api";
 const PORT = parseInt(process.env.MCP_PORT || "8808");
 const API_KEY = process.env.MCP_API_KEY || "";
+const DEFAULT_SES_API_KEY = process.env.SES_API_KEY || "";
 
 const sessionTokens = new Map();
+const sessionApiKeys = new Map();
 
 async function api(sessionId, method, path, body) {
   const headers = { "Content-Type": "application/json" };
-  const token = sessionTokens.get(sessionId);
+  const token = sessionApiKeys.get(sessionId) || DEFAULT_SES_API_KEY || sessionTokens.get(sessionId);
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const opts = { method, headers };
   if (body && method !== "GET") opts.body = JSON.stringify(body);
@@ -34,6 +36,7 @@ async function api(sessionId, method, path, body) {
 
 const ACTIONS = {
   // 认证与个人
+  authenticate:       { method: "GET",  path: "/auth/me" },
   login:              { method: "POST", path: "/auth/login" },
   me:                 { method: "GET",  path: "/auth/me" },
   set_contact_email:  { method: "PUT",  path: "/user/contact-email" },
@@ -107,6 +110,8 @@ function registerTools(server) {
 
       const act = ACTIONS[action];
       if (!act) return { content: [{ type: "text", text: `未知操作: ${action}\n可用: ${Object.keys(ACTIONS).join(", ")}` }] };
+      const authenticationKey = action === "authenticate" ? params.api_key : undefined;
+      if (action === "authenticate") params = {};
 
       let path = act.path;
       for (const [key, val] of Object.entries(params)) {
@@ -122,6 +127,20 @@ function registerTools(server) {
       const body = act.method !== "GET" ? params : undefined;
       const sid = extra?.sessionId || "default";
 
+      if (action === "authenticate") {
+        const apiKey = authenticationKey;
+        if (!apiKey || !String(apiKey).startsWith("ses_")) {
+          throw new Error("需要有效的用户 API Key（ses_ 前缀）");
+        }
+        sessionApiKeys.set(sid, String(apiKey));
+        try {
+          const data = await api(sid, "GET", path);
+          return { content: [{ type: "text", text: `认证成功！${data.display_name}（${data.is_admin ? "管理员" : "用户"}）` }] };
+        } catch (error) {
+          sessionApiKeys.delete(sid);
+          throw error;
+        }
+      }
       if (action === "login") {
         const data = await api(sid, "POST", path, body);
         sessionTokens.set(sid, data.access_token);
@@ -164,6 +183,8 @@ app.post("/mcp", authMiddleware, async (req, res) => {
     const sessionId = req.headers["mcp-session-id"];
 
     if (sessionId && sessions.has(sessionId)) {
+      const userApiKey = req.headers["x-ses-api-key"];
+      if (userApiKey) sessionApiKeys.set(sessionId, String(userApiKey));
       const { transport } = sessions.get(sessionId);
       await transport.handleRequest(req, res, req.body);
       return;
@@ -175,14 +196,18 @@ app.post("/mcp", authMiddleware, async (req, res) => {
 
     transport.onclose = () => {
       const sid = transport.sessionId;
-      if (sid) { sessions.delete(sid); sessionTokens.delete(sid); }
+      if (sid) { sessions.delete(sid); sessionTokens.delete(sid); sessionApiKeys.delete(sid); }
     };
 
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);
 
     const sid = transport.sessionId;
-    if (sid) sessions.set(sid, { server, transport });
+    if (sid) {
+      sessions.set(sid, { server, transport });
+      const userApiKey = req.headers["x-ses-api-key"];
+      if (userApiKey) sessionApiKeys.set(sid, String(userApiKey));
+    }
   } catch (e) {
     console.error("[MCP Error]", e.message);
     if (!res.headersSent) res.status(500).json({ error: e.message });
@@ -206,6 +231,7 @@ app.delete("/mcp", authMiddleware, async (req, res) => {
     await transport.handleRequest(req, res);
     sessions.delete(sid);
     sessionTokens.delete(sid);
+    sessionApiKeys.delete(sid);
   } else {
     res.status(200).json({ ok: true });
   }

@@ -59,6 +59,77 @@ class TestSendBulkEmailDedup:
         assert len(active_contacts) == 2
         assert len(skipped_contacts) == 1
 
+    def test_creates_details_for_all_contacts_across_multiple_pages(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from core.database import Base
+        from core import redis_cache
+        from domain.auth.models import User
+        from domain.audience.models import ContactGroup, Contact
+        from domain.template.models import EmailTemplate
+        from domain.sending.models import SendingJob, SendingJobDetail
+        from domain.sending.service import send_bulk_email
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        db = sessionmaker(bind=engine)()
+
+        user = User(
+            username="bulk-user",
+            hashed_password="x",
+            email="sender@example.com",
+            daily_send_limit=10000,
+        )
+        db.add(user)
+        db.flush()
+        group = ContactGroup(name="Large group", user_id=user.id)
+        db.add(group)
+        db.flush()
+        template = EmailTemplate(
+            name="Bulk template",
+            ses_name="bulk_template",
+            subject="Hello",
+            html_body="<p>Hello</p>",
+            text_body="Hello",
+            user_id=user.id,
+        )
+        db.add(template)
+        db.bulk_insert_mappings(Contact, [
+            {
+                "name": f"Contact {i}",
+                "email": f"contact-{i:04d}@example.com",
+                "group_id": group.id,
+            }
+            for i in range(5016)
+        ])
+        db.commit()
+
+        with patch.object(redis_cache, "get_int", return_value=0), \
+             patch.object(redis_cache, "incrby", return_value=5016), \
+             patch.object(redis_cache, "key_exists", return_value=False), \
+             patch.object(redis_cache, "available", return_value=False), \
+             patch("core.sender.get_engine", return_value=None):
+            result = send_bulk_email(
+                db,
+                source_email=user.email,
+                template_id=template.id,
+                group_id=group.id,
+                user_id=user.id,
+            )
+
+        job = db.query(SendingJob).filter(SendingJob.batch_id == result["batch_id"]).one()
+        detail_count = db.query(SendingJobDetail).filter(
+            SendingJobDetail.batch_id == result["batch_id"]
+        ).count()
+
+        assert result["total_contacts"] == 5016
+        assert job.total_contacts == 5016
+        assert detail_count == 5016
+
+        db.close()
+        engine.dispose()
+
 
 class TestProcessSesEvent:
     """Test SES event processing."""
@@ -144,6 +215,121 @@ class TestProcessSesEvent:
         db.commit.assert_not_called()
 
 
+class TestBotEventTracking:
+    """SES isBotEvent（2026-08）：区分真人与自动化系统触发的 Open/Click。"""
+
+    def _make_detail(self):
+        d = MagicMock()
+        d.send_status = "Success"
+        d.delivery_status = None
+        d.message_id = "msg-bot"
+        d.open_count = 0
+        d.human_open_count = 0
+        d.first_open_time = None
+        d.click_count = 0
+        d.human_click_count = 0
+        d.first_click_time = None
+        return d
+
+    def test_human_open_counts_as_human(self):
+        from domain.sending.service import process_ses_event
+
+        db = MagicMock()
+        detail = self._make_detail()
+        db.query.return_value.filter.return_value.first.return_value = detail
+
+        event_data = {
+            "eventType": "Open",
+            "mail": {"messageId": "msg-bot"},
+            "open": {"timestamp": "2026-08-12T10:00:00Z", "isBotEvent": "Unlikely"},
+        }
+        process_ses_event(event_data, db)
+
+        assert detail.open_count == 1
+        assert detail.human_open_count == 1
+        assert detail.last_open_is_bot is False
+        assert detail.first_open_time is not None
+        db.commit.assert_called()
+
+    def test_bot_open_not_counted_as_human(self):
+        from domain.sending.service import process_ses_event
+
+        db = MagicMock()
+        detail = self._make_detail()
+        db.query.return_value.filter.return_value.first.return_value = detail
+
+        event_data = {
+            "eventType": "Open",
+            "mail": {"messageId": "msg-bot"},
+            "open": {"timestamp": "2026-08-12T10:00:00Z", "isBotEvent": "Likely"},
+        }
+        process_ses_event(event_data, db)
+
+        assert detail.open_count == 1
+        assert detail.human_open_count == 0
+        assert detail.last_open_is_bot is True
+        # 机器人事件不记录首次真人打开时间
+        assert detail.first_open_time is None
+
+    def test_human_click_counts_as_human(self):
+        from domain.sending.service import process_ses_event
+
+        db = MagicMock()
+        detail = self._make_detail()
+        db.query.return_value.filter.return_value.first.return_value = detail
+
+        event_data = {
+            "eventType": "Click",
+            "mail": {"messageId": "msg-bot"},
+            "click": {"timestamp": "2026-08-12T10:00:00Z", "isBotEvent": "Unlikely"},
+        }
+        process_ses_event(event_data, db)
+
+        assert detail.click_count == 1
+        assert detail.human_click_count == 1
+        assert detail.last_click_is_bot is False
+        assert detail.first_click_time is not None
+
+    def test_bot_click_not_counted_as_human(self):
+        from domain.sending.service import process_ses_event
+
+        db = MagicMock()
+        detail = self._make_detail()
+        db.query.return_value.filter.return_value.first.return_value = detail
+
+        event_data = {
+            "eventType": "Click",
+            "mail": {"messageId": "msg-bot"},
+            "click": {"timestamp": "2026-08-12T10:00:00Z", "isBotEvent": "Likely"},
+        }
+        process_ses_event(event_data, db)
+
+        assert detail.click_count == 1
+        assert detail.human_click_count == 0
+        assert detail.last_click_is_bot is True
+        assert detail.first_click_time is None
+
+    def test_missing_isbotevent_defaults_to_human(self):
+        """老账户或字段缺失时，默认按真人处理（向后兼容）。"""
+        from domain.sending.service import process_ses_event
+
+        db = MagicMock()
+        detail = self._make_detail()
+        db.query.return_value.filter.return_value.first.return_value = detail
+
+        event_data = {
+            "eventType": "Open",
+            "mail": {"messageId": "msg-bot"},
+            "open": {"timestamp": "2026-08-12T10:00:00Z"},
+        }
+        process_ses_event(event_data, db)
+
+        assert detail.open_count == 1
+        assert detail.human_open_count == 1
+        assert detail.last_open_is_bot is False
+
+
+
 class TestDailyQuotaRedis:
     """每日配额 Redis 计数器：命中缓存直接用，未命中回退 DB 并回填。"""
 
@@ -185,4 +371,3 @@ class TestDailyQuotaRedis:
         si.assert_called_once()  # 回填 Redis
         assert q["today_sent"] == 120
         assert q["remaining"] == 380
-
