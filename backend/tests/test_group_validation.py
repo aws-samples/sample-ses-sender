@@ -154,6 +154,30 @@ def test_snapshot_freezes_all_filtered_ids_and_preserves_source_records(db):
     assert exc.value.status_code in (404, 409, 410)
 
 
+def test_new_snapshot_replaces_only_same_user_group_snapshot(db):
+    from domain.audience.models import ContactSelection, ContactSelectionItem
+
+    old = service.create_contact_selection(db, 1, 1, flags=["manual"])
+    same_user_other_group = service.create_contact_selection(db, 3, 1)
+    other_user = service.create_contact_selection(db, 2, 2)
+    assert db.query(ContactSelection).count() == 3
+    assert db.query(ContactSelectionItem).count() == 4
+
+    replacement = service.create_contact_selection(db, 1, 1, flags=["ses"])
+
+    assert db.get(ContactSelection, old["selection_id"]) is None
+    assert db.query(ContactSelectionItem).filter_by(selection_id=old["selection_id"]).count() == 0
+    assert db.get(ContactSelection, replacement["selection_id"]) is not None
+    assert db.get(ContactSelection, same_user_other_group["selection_id"]) is not None
+    assert db.get(ContactSelection, other_user["selection_id"]) is not None
+    assert db.query(ContactSelection).count() == 3
+    assert db.query(ContactSelectionItem).count() == 3
+
+    with pytest.raises(HTTPException) as exc:
+        service.bulk_delete_contacts(db, 1, 1, selection_id=old["selection_id"])
+    assert exc.value.status_code == 404
+
+
 def test_explicit_ids_are_atomic_and_cannot_escape_group(db):
     for ids in ([1, 8], [1, 9], [1, 999]):
         with pytest.raises(HTTPException):

@@ -94,11 +94,19 @@ def create_contact_selection(db: Session, group_id: int, user_id: int, search: s
     statuses = ContactStatusQuery(db, user_id, group.owner.email)
     query = statuses.filter_query(db.query(Contact.id).filter(Contact.group_id == group_id), search, flags)
     now = datetime.utcnow()
-    # Remove expired snapshots with a bounded owner scope. Item IDs are indexed
-    # by selection_id; cascading deletion keeps retention bounded to active use.
-    expired = select(ContactSelection.id).where(ContactSelection.user_id == user_id, ContactSelection.expires_at <= now)
-    db.query(ContactSelectionItem).filter(ContactSelectionItem.selection_id.in_(expired)).delete(synchronize_session=False)
-    db.query(ContactSelection).filter(ContactSelection.user_id == user_id, ContactSelection.expires_at <= now).delete(synchronize_session=False)
+    # Keep one active snapshot per owner/group and remove the owner's expired
+    # snapshots. Item IDs are indexed by selection_id, so cleanup stays bounded.
+    obsolete_condition = ((ContactSelection.expires_at <= now) |
+                          (ContactSelection.group_id == group_id))
+    obsolete = select(ContactSelection.id).where(
+        ContactSelection.user_id == user_id, obsolete_condition,
+    )
+    db.query(ContactSelectionItem).filter(
+        ContactSelectionItem.selection_id.in_(obsolete)
+    ).delete(synchronize_session=False)
+    db.query(ContactSelection).filter(
+        ContactSelection.user_id == user_id, obsolete_condition,
+    ).delete(synchronize_session=False)
     selection = ContactSelection(id=str(uuid4()), user_id=user_id, group_id=group_id,
                                  created_at=now, expires_at=now + timedelta(minutes=15))
     db.add(selection)
