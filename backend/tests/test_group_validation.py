@@ -129,7 +129,7 @@ def test_filter_and_display_have_identical_matching_semantics(db):
         "bounced": {i["id"] for i in all_items if i["has_bounced"]},
     }
     assert 10 in expected["manual"]
-    assert 11 not in expected["unsubscribed"]
+    assert 11 in expected["unsubscribed"]
     assert 12 not in expected["bounced"]
     for flag, ids in expected.items():
         assert {i["id"] for i in service.list_contacts(db, 1, 1, flags=flag).items} == ids
@@ -176,6 +176,32 @@ def test_new_snapshot_replaces_only_same_user_group_snapshot(db):
     with pytest.raises(HTTPException) as exc:
         service.bulk_delete_contacts(db, 1, 1, selection_id=old["selection_id"])
     assert exc.value.status_code == 404
+
+
+def test_snapshot_creation_locks_owned_group_before_replacing_snapshot(db):
+    from sqlalchemy.dialects import mysql
+
+    statements = []
+
+    def capture(_connection, clause, _multiparams, _params, _execution_options):
+        statements.append(clause)
+
+    event.listen(db.bind, "before_execute", capture)
+    try:
+        service.create_contact_selection(db, 1, 1, flags=["manual"])
+    finally:
+        event.remove(db.bind, "before_execute", capture)
+
+    first_select = next(index for index, statement in enumerate(statements)
+                        if statement.is_select)
+    first_sql = str(statements[first_select].compile(
+        dialect=mysql.dialect(), compile_kwargs={"literal_binds": True},
+    )).upper()
+    assert "FROM CONTACT_GROUPS" in first_sql
+    assert "FOR UPDATE" in first_sql
+    first_write = next(index for index, statement in enumerate(statements)
+                       if statement.is_delete or statement.is_insert)
+    assert first_select < first_write
 
 
 def test_explicit_ids_are_atomic_and_cannot_escape_group(db):
@@ -241,7 +267,7 @@ def test_queries_are_bounded_independent_of_contact_count(db):
     assert counts[0] <= 6
 
 
-def test_exact_recipient_comparison_preserves_trailing_spaces(db):
+def test_case_insensitive_recipient_comparison_preserves_trailing_spaces(db):
     db.add_all([
         Contact(id=10, group_id=1, email="unsub@example.com "),
         Contact(id=11, group_id=1, email="bounced@example.com "),
@@ -292,16 +318,18 @@ def test_request_schemas_reject_ambiguous_or_invalid_selection(db):
 @pytest.mark.parametrize("sender", ["SENDER@EXAMPLE.COM", "sénder@example.com"])
 def test_unsubscribe_sender_scope_matches_sending_database_collation(db, sender):
     db.get(User, 1).email = sender
+    db.get(Contact, 5).email = "Unsub@Example.COM"
     db.commit()
     # Sending loads the sender's records with ordinary SQL equality, then uses
-    # exact recipient strings in a Python set. Preserve both halves of that rule.
+    # case-folded recipient strings in a Python set. Preserve both halves.
     producer_recipients = {row[0] for row in db.query(UnsubscribeRecord.email).filter(
         UnsubscribeRecord.source_email == sender
     ).all()}
     if db.bind.dialect.name in ("mysql", "mariadb"):
         assert producer_recipients == {"unsub@example.com", "both@example.com"}
+    producer_recipient_keys = {email.casefold() for email in producer_recipients}
     result = service.list_contacts(db, 1, 1)
-    expected_ids = {row["id"] for row in result.items if row["email"] in producer_recipients}
+    expected_ids = {row["id"] for row in result.items if row["email"].casefold() in producer_recipient_keys}
     assert {row["id"] for row in result.items if row["is_unsubscribed"]} == expected_ids
     assert {row["id"] for row in service.list_contacts(db, 1, 1, flags="unsubscribed").items} == expected_ids
     assert not expected_ids.intersection(row["id"] for row in service.list_contacts(db, 1, 1, flags="unmatched").items)

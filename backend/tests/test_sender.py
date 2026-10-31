@@ -141,10 +141,15 @@ class TestSendOneBlacklist:
     """Tests for blacklist check in _send_one"""
 
     def setup_method(self):
+        self._suppression_ready = patch("core.blacklist.suppression_ready", return_value=True)
+        self._suppression_ready.start()
         self.engine = SenderEngine.__new__(SenderEngine)
         self.engine._stats_lock = __import__("threading").Lock()
         self.engine._total_sent = 0
         self.engine._total_errors = 0
+
+    def teardown_method(self):
+        self._suppression_ready.stop()
 
     @patch("core.blacklist.is_blacklisted", return_value=True)
     @patch("core.sender.update_detail_status")

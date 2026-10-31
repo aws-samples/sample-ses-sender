@@ -90,7 +90,7 @@ def validate_group(db: Session, group_id: int, user_id: int) -> dict:
 
 
 def create_contact_selection(db: Session, group_id: int, user_id: int, search: str = "", flags=None) -> dict:
-    group = _get_user_group(db, group_id, user_id)
+    group = _get_user_group(db, group_id, user_id, for_update=True)
     statuses = ContactStatusQuery(db, user_id, group.owner.email)
     query = statuses.filter_query(db.query(Contact.id).filter(Contact.group_id == group_id), search, flags)
     now = datetime.utcnow()
@@ -303,11 +303,14 @@ def upload_contacts_excel(db: Session, group_id: int, user_id: int, file: Upload
 
 
 # ========== 内部工具 ==========
-def _get_user_group(db: Session, group_id: int, user_id: int) -> ContactGroup:
+def _get_user_group(db: Session, group_id: int, user_id: int, *, for_update: bool = False) -> ContactGroup:
     """获取属于指定用户的客群，不存在则抛异常"""
-    group = db.query(ContactGroup).filter(
+    query = db.query(ContactGroup).filter(
         ContactGroup.id == group_id, ContactGroup.user_id == user_id
-    ).first()
+    )
+    if for_update:
+        query = query.with_for_update()
+    group = query.first()
     if not group:
         raise HTTPException(status_code=404, detail="客群不存在或无权操作")
     return group

@@ -13,7 +13,7 @@ import logging
 from typing import Set
 
 from core import redis_cache
-from core.config import AWS_REGION
+from core.config import AWS_REGION, ENABLE_SES_SUPPRESSION_SYNC
 
 logger = logging.getLogger("ses-sender.blacklist")
 
@@ -24,6 +24,8 @@ _EMPTY_MEMBER = "__empty__"  # Keep an authoritative empty SES snapshot in Redis
 _blacklist: Set[str] = set()
 _ses_suppressions: Set[str] = set()
 _ses_version = -1
+_ses_ready = False
+_ses_redis_trusted = False
 _lock = threading.Lock()
 _running = False
 
@@ -34,7 +36,7 @@ def _norm(email: str) -> str:
 
 def _load_from_db():
     """从数据库加载黑名单到内存 + Redis（若可用）。"""
-    global _ses_version
+    global _ses_version, _ses_ready, _ses_redis_trusted
     from core.database import SessionLocal
     from domain.sending.models import EmailBlacklist, SesSuppressedDestination, SesSuppressionSyncState
 
@@ -46,22 +48,40 @@ def _load_from_db():
             _blacklist.clear()
             _blacklist.update(emails)
         redis_cache.replace_set(_REDIS_KEY, emails)
+        # Read authority before rows. Under READ COMMITTED this prevents an
+        # initial sync committed between the two reads from blessing older rows.
+        state = db.get(SesSuppressionSyncState, AWS_REGION)
         suppressed = {
             _norm(email) for (email,) in db.query(SesSuppressedDestination.email).filter(
                 SesSuppressedDestination.region == AWS_REGION
             ).all() if email
         }
-        state = db.get(SesSuppressionSyncState, AWS_REGION)
         version = state.version if state else 0
-        with _lock:
-            if version >= _ses_version:
-                _ses_suppressions.clear()
-                _ses_suppressions.update(suppressed)
-                _ses_version = version
-        # Empty snapshots still need a key so other instances don't fall back to
-        # their old, nonempty memory snapshot after AWS removes the last address.
-        redis_cache.replace_versioned_set(_SES_REDIS_KEY, suppressed or {_EMPTY_MEMBER}, version)
-        logger.info(f"[Blacklist] 已加载 {len(emails)} 个人工黑名单、{len(suppressed)} 个 SES 抑制邮箱")
+        snapshot_is_authoritative = bool(state and state.last_success_at) or not ENABLE_SES_SUPPRESSION_SYNC
+        # A missing state after an upgrade is not evidence that the AWS list is
+        # empty. Leaving the local state unchanged also makes readiness monotonic
+        # if this read began before another thread published the first success.
+        if snapshot_is_authoritative:
+            becomes_ready = bool(state and state.last_success_at)
+            with _lock:
+                if version >= _ses_version:
+                    _ses_suppressions.clear()
+                    _ses_suppressions.update(suppressed)
+                    _ses_version = version
+            # Empty snapshots still need a key so other instances don't fall back to
+            # their old, nonempty memory snapshot after AWS removes the last address.
+            publish_result = redis_cache.replace_versioned_set(
+                _SES_REDIS_KEY, suppressed or {_EMPTY_MEMBER}, version,
+            )
+            with _lock:
+                # False means Redis already has a newer authoritative version;
+                # None means the publish failed and stale Redis must be ignored.
+                _ses_redis_trusted = publish_result is not None
+                _ses_ready = becomes_ready
+        logger.info(
+            "[Blacklist] 已加载 %s 个人工黑名单、%s 个 SES 抑制邮箱（同步%s）",
+            len(emails), len(suppressed), "就绪" if suppression_ready() else "未就绪",
+        )
     except Exception as e:
         logger.error(f"[Blacklist] 加载失败: {e}")
     finally:
@@ -85,6 +105,14 @@ def start():
     t.start()
 
 
+def suppression_ready() -> bool:
+    """Whether sending may rely on the current regional suppression snapshot."""
+    if not ENABLE_SES_SUPPRESSION_SYNC:
+        return True
+    with _lock:
+        return _ses_ready
+
+
 def is_blacklisted(email: str) -> bool:
     """两种来源任一命中即拦截；人工增删只操作人工名单。"""
     e = _norm(email)
@@ -96,7 +124,13 @@ def is_blacklisted(email: str) -> bool:
         return True
     # A missing SES key may mean eviction or a rolling upgrade before the first
     # cache publish, not an empty authoritative list.
-    ses_hit = redis_cache.sismember(_SES_REDIS_KEY, e) if redis_cache.key_exists(_SES_REDIS_KEY) else None
+    with _lock:
+        use_redis_snapshot = _ses_redis_trusted
+    ses_hit = (
+        redis_cache.sismember(_SES_REDIS_KEY, e)
+        if use_redis_snapshot and redis_cache.key_exists(_SES_REDIS_KEY)
+        else None
+    )
     if ses_hit is None:
         with _lock:
             ses_hit = e in _ses_suppressions

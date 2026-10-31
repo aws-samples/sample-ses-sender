@@ -75,6 +75,10 @@ class SqsSendEngine:
             time.sleep(5)  # nosemgrep: arbitrary-sleep
 
     def _produce_once(self):
+        from core import blacklist
+        if not blacklist.suppression_ready():
+            return
+
         from domain.sending.models import SendingJob, SendingJobDetail
         from datetime import datetime
 
@@ -204,6 +208,10 @@ class SqsSendEngine:
 
         while self.running:
             try:
+                from core import blacklist
+                if not blacklist.suppression_ready():
+                    time.sleep(1)  # nosemgrep: arbitrary-sleep
+                    continue
                 resp = self.sqs.receive_message(
                     QueueUrl=SEND_QUEUE_URL,
                     MaxNumberOfMessages=BATCH,
@@ -242,7 +250,13 @@ class SqsSendEngine:
                                 detail, job, tpl, atts, reply_to, cmap.get(detail.recipient)
                             )
                             # 受全局令牌桶限流的发送
-                            _sender.send_task(task, rate_limiter=self.rate_limiter, log_prefix=f"SQS-Consumer-{worker_id}")
+                            result = _sender.send_task(
+                                task,
+                                rate_limiter=self.rate_limiter,
+                                log_prefix=f"SQS-Consumer-{worker_id}",
+                            )
+                            if result == "deferred":
+                                continue
                             self.sqs.delete_message(QueueUrl=SEND_QUEUE_URL, ReceiptHandle=msg["ReceiptHandle"])
                         except Exception as e:
                             logger.error(f"[SQS Consumer-{worker_id}] 处理消息失败: {e}")

@@ -47,6 +47,16 @@ def normalized_equal(db, column, normalized):
     return stored == normalized
 
 
+def case_insensitive_equal(db, column, value):
+    stored = func.lower(column)
+    normalized = func.lower(value)
+    if db.bind.dialect.name in ("mysql", "mariadb"):
+        # The ordinary equality keeps the existing email index usable; the
+        # binary lowercase check avoids the collation's accent/space folding.
+        return and_(column == value, cast(stored, BINARY) == cast(normalized, BINARY))
+    return stored == normalized
+
+
 class ContactStatusQuery:
     def __init__(self, db, user_id, source_email):
         from core.config import AWS_REGION, ENABLE_SES_SUPPRESSION_SYNC, SES_SUPPRESSION_SYNC_INTERVAL_SECONDS
@@ -76,10 +86,10 @@ class ContactStatusQuery:
         ses = select(1).where(*ses_where).correlate(Contact).exists()
         self.ses_reason = select(SesSuppressedDestination.reason).where(*ses_where).correlate(Contact).limit(1).scalar_subquery()
         # Sending loads records using the database's sender collation, then
-        # compares recipients using a Python set. Match those two distinct rules.
+        # compares case-folded recipients without trimming them.
         unsubscribed = (
             select(1).where(UnsubscribeRecord.source_email == source_email,
-                            exact_equal(db, UnsubscribeRecord.email, Contact.email)).correlate(Contact).exists()
+                            case_insensitive_equal(db, UnsubscribeRecord.email, Contact.email)).correlate(Contact).exists()
             if source_email else literal(False)
         )
         # Probe the recipient index before joining to its owner's job. MySQL can

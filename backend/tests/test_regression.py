@@ -75,6 +75,13 @@ class TestIdempotentSend:
     """问题：pending 任务反复入队导致海量重复邮件。
     修复：发送前检查 detail 状态，非 Pending/Queued 直接跳过。"""
 
+    def setup_method(self):
+        self._suppression_ready = patch("core.blacklist.suppression_ready", return_value=True)
+        self._suppression_ready.start()
+
+    def teardown_method(self):
+        self._suppression_ready.stop()
+
     @patch("core.blacklist.is_blacklisted", return_value=False)
     @patch("core.database.SessionLocal")
     @patch("core.sender.update_detail_status")

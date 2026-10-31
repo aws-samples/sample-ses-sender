@@ -78,13 +78,15 @@ def test_sender_and_region_isolation(db):
     assert exc.value.status_code == 404
 
 
-def test_unsubscribe_matches_existing_producer_case_semantics(db):
+def test_unsubscribe_matches_sending_case_insensitive_recipient_semantics(db):
     db.add_all([
         Contact(group_id=1, email="User@example.com"),
         UnsubscribeRecord(email="user@example.com", source_email="sender@example.com"),
     ])
     db.commit()
-    assert list_contacts(db, 1, 1).items[0]["is_unsubscribed"] is False
+    assert list_contacts(db, 1, 1).items[0]["is_unsubscribed"] is True
+    assert list_contacts(db, 1, 1, flags="unsubscribed").total == 1
+    assert list_contacts(db, 1, 1, flags="unmatched").total == 0
 
 
 def test_shared_sender_shares_unsubscribe_scope(db):
@@ -204,7 +206,10 @@ def test_authoritative_empty_redis_snapshot_overrides_other_instance_old_memory(
     from core import redis_cache
     redis_sets = {}
     monkeypatch.setattr(redis_cache, "replace_set", lambda key, members: redis_sets.update({key: set(members)}))
-    monkeypatch.setattr(redis_cache, "replace_versioned_set", lambda key, members, version: redis_sets.update({key: set(members)}))
+    monkeypatch.setattr(
+        redis_cache, "replace_versioned_set",
+        lambda key, members, version: redis_sets.update({key: set(members)}) or True,
+    )
     monkeypatch.setattr(redis_cache, "key_exists", lambda key: key in redis_sets)
     monkeypatch.setattr(redis_cache, "sismember", lambda key, email: email in redis_sets.get(key, set()))
     blacklist_cache.reload()
