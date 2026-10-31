@@ -24,6 +24,10 @@ else:
 # AWS
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 
+# 当前 AWS 区域的 SES 账户级抑制名单，后台只读同步到本地。
+ENABLE_SES_SUPPRESSION_SYNC = os.getenv("ENABLE_SES_SUPPRESSION_SYNC", "true").lower() in ("true", "1", "yes")
+SES_SUPPRESSION_SYNC_INTERVAL_SECONDS = max(1, int(os.getenv("SES_SUPPRESSION_SYNC_INTERVAL_SECONDS", "300")))
+
 # SES Configuration Set (用于 VDM 追踪送达率/打开率)
 # 需要在 AWS SES 控制台创建 Configuration Set 并启用 VDM
 SES_CONFIGURATION_SET = os.getenv("SES_CONFIGURATION_SET", "")

@@ -412,6 +412,7 @@ export class SesSenderStack extends cdk.Stack {
           "ses:GetAccountSendingEnabled",
           "ses:GetSendQuota",
           "ses:GetSendStatistics",
+          "ses:ListSuppressedDestinations",
           "cloudwatch:GetMetricStatistics",
           "cloudwatch:ListMetrics",
           "bedrock:InvokeModel",
@@ -440,6 +441,8 @@ export class SesSenderStack extends cdk.Stack {
       environment: {
         AWS_REGION: region,
         SES_CONFIGURATION_SET: props.configurationSetName,
+        ENABLE_SES_SUPPRESSION_SYNC: "true",
+        SES_SUPPRESSION_SYNC_INTERVAL_SECONDS: "300",
         SQS_QUEUE_URL: eventQueue.queueUrl,
         UNSUBSCRIBE_BASE_URL: `${publicUrl}/api`,
         BEDROCK_MODEL_ID: props.bedrockModelId,

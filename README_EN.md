@@ -29,7 +29,7 @@ A bulk email management platform built on AWS SES with a separated frontend/back
 |---------|-------------|
 | Dashboard | Personal sending stats: today/month/total volume, daily quota progress, delivery/open rates, 7-day trend chart |
 | Contact Groups | Create/edit/delete groups with search and pagination |
-| Contact Management | Bulk add contacts, Excel import/export/template download, custom JSON attributes |
+| Contact Management | Bulk add contacts, Excel import/export/template download, custom JSON attributes; manual blacklist, SES suppression, and unsubscribe status |
 | Email Templates | Each user maintains independent templates (create/edit/delete), live HTML preview, AI-powered optimization |
 | Bulk Sending | Select template and target group, async sending with auto rate limiting, daily quota check, skips unsubscribed contacts |
 | Scheduled Sending | One-time scheduled send, daily/weekly/monthly recurring send, pause/resume support, auto-executed by background scheduler |
@@ -110,6 +110,10 @@ AWS_REGION=us-east-1
 
 # SES Configuration Set (for VDM tracking, leave empty to skip)
 SES_CONFIGURATION_SET=ses-sender-tracking
+
+# Read-only SES account-level suppression synchronization (every 300 seconds)
+ENABLE_SES_SUPPRESSION_SYNC=true
+SES_SUPPRESSION_SYNC_INTERVAL_SECONDS=300
 
 # SQS Queue URL (for per-email event tracking, leave empty to skip)
 SQS_QUEUE_URL=
@@ -194,14 +198,14 @@ aws sesv2 create-configuration-set \
   --region us-east-1
 ```
 
-#### Step 2: Disable Suppression List
+#### Step 2: Check the Account-Level Suppression List
 
 ```bash
-aws sesv2 put-configuration-set-suppression-options \
-  --configuration-set-name ses-sender-tracking \
-  --suppressed-reasons \
+aws sesv2 list-suppressed-destinations \
   --region us-east-1
 ```
+
+The application synchronizes the current account and region's suppression list, displays contact status, and filters suppressed recipients when sending. There is no need to disable suppression. See “SES Suppression Synchronization and Contact Status” below.
 
 #### Step 3: Configure VDM Options (Disable Optimized Shared Delivery)
 
@@ -392,10 +396,29 @@ After configuration:
 | **All metrics are 0** | AWS_REGION mismatch | Ensure `AWS_REGION` matches SES/CloudWatch region |
 | **All metrics are 0** | `SES_CONFIGURATION_SET` not applied | Use `docker-compose down && up -d` instead of `restart` |
 | **Open/Click are 0** | VDM not enabled | Run Step 5 to enable account-level VDM |
-| Emails not received after adding Config Set | Suppression List active | Disable Suppression List on Config Set |
+| Emails not received after adding Config Set | Recipient is suppressed | Check contact status and the SES suppression reason; locally synchronized suppressed recipients are filtered before sending |
 | Emails not received after adding Config Set | Optimized Shared Delivery | Disable at account and Config Set level |
 | Emails not received after adding Config Set | TLS Policy set to REQUIRE | Change to OPTIONAL |
 | Env var changes don't take effect | `docker-compose restart` | Use `docker-compose down && docker-compose up -d` |
+
+## SES Suppression Synchronization and Contact Status
+
+On startup, the backend reads the SES **account-level suppression list** for its current AWS credentials and `AWS_REGION`, then synchronizes every 300 seconds by default. The snapshot excludes other accounts, regions, and the SES global suppression list. Synchronization uses [SES v2 ListSuppressedDestinations](https://docs.aws.amazon.com/ses/latest/APIReference-V2/API_ListSuppressedDestinations.html) and requires `ses:ListSuppressedDestinations` on the runtime role. CDK includes this permission; add it to the runtime role for existing Docker Compose / EC2 deployments.
+
+```env
+ENABLE_SES_SUPPRESSION_SYNC=true
+SES_SUPPRESSION_SYNC_INTERVAL_SECONDS=300
+```
+
+The snapshot is stored in separate database tables created by the automatic Alembic migration on startup. All pages must load successfully before one transaction updates the snapshot. Entries removed from SES disappear after the next successful synchronization; administrator-maintained blacklist entries remain independent. Synchronization never adds or removes AWS suppression entries or changes SES suppression settings. Failed AWS requests retain the last successful snapshot and are retried on subsequent runs.
+
+Contact emails display inline flags for historical bounces, manual blacklist matches, SES suppression, and unsubscribe matches; multiple flags can appear together. SES tooltips distinguish `BOUNCE` and `COMPLAINT`. Historical bounces are scoped to the current user's sending jobs, while unsubscribe matches use the contact email and the user's sending email. A historical bounce and current SES suppression are separate flags.
+
+Validate the selected group to see counts across all its contacts, then filter by any matching flag and optionally combine this with name/email search. Filtering happens before pagination. Validation uses the local SES snapshot and indexed database queries without per-recipient AWS requests. Pending, stale, failed, or disabled SES synchronization, or a missing sending email, results in an unknown status rather than a confirmed non-match.
+
+Select individual contacts, the current page, or explicitly select all filtered results across pages. Cross-page selection fixes the contact IDs at selection time and expires after 15 minutes. Changing the group, search, or filters clears selection. Bulk deletion confirms the group and count and removes only that group's contacts, preserving other groups, blacklist/unsubscribe records, and sending history. Sending policies are unchanged.
+
+Bulk and scheduled sends also filter the locally synchronized SES suppression entries, manual blacklist, and applicable unsubscribe records. Synchronization is periodic: before the first successful run or during a failure, the interface and local sending filter use the available snapshot. A non-match does not guarantee sending or delivery. Recreate the backend container after changing these environment variables.
 
 ## One-Click Unsubscribe
 
@@ -521,6 +544,7 @@ The EC2 instance IAM Role requires the following permissions:
     "ses:DeleteTemplate",
     "ses:SendEmail",
     "ses:SendBulkTemplatedEmail",
+    "ses:ListSuppressedDestinations",
     "sesv2:SendEmail",
     "sesv2:CreateEmailTemplate",
     "sesv2:UpdateEmailTemplate",
@@ -549,7 +573,7 @@ The EC2 instance IAM Role requires the following permissions:
 6. **SQS Event Tracking**: When `SQS_QUEUE_URL` is configured, the backend polls SQS for per-email events (delivery, bounce, open, click, complaint). If not configured, the service starts normally without event tracking.
 7. **Frontend Reverse Proxy**: The frontend acts as a reverse proxy for all API requests (`/api/*` → backend:8000). Only port 3000 needs to be exposed externally.
 8. **Configuration Set Notes**:
-   - Must disable Suppression List and Optimized Shared Delivery
+   - Account-level suppression entries are synchronized locally and filtered when sending; disable Optimized Shared Delivery as described above
    - TLS Policy should be set to OPTIONAL
    - After changing env vars, use `docker-compose down && docker-compose up -d` — `restart` won't apply changes
 

@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 from core.database import get_db
 from core.deps import get_current_user, get_user_from_query_token
 from domain.auth.models import User
-from domain.audience.schemas import GroupCreate, GroupUpdate, GroupOut, ContactCreate, ContactOut, PaginatedResponse
+from domain.audience.schemas import (GroupCreate, GroupUpdate, GroupOut, ContactCreate,
+                                     ContactOut, PaginatedResponse, ContactSelectionCreate, ContactBulkDelete)
 from domain.audience import service
 
 router = APIRouter(tags=["客群管理"])
@@ -43,12 +44,31 @@ def delete_group(group_id: int, current_user: User = Depends(get_current_user), 
 def list_contacts(
     group_id: int,
     search: str = "",
+    flags: str = "",
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return service.list_contacts(db, group_id, current_user.id, search, page, page_size)
+    return service.list_contacts(db, group_id, current_user.id, search, page, page_size, flags)
+
+
+@router.post("/groups/{group_id}/validate")
+def validate_group(group_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return service.validate_group(db, group_id, current_user.id)
+
+
+@router.post("/groups/{group_id}/contacts/selection")
+def create_contact_selection(group_id: int, data: ContactSelectionCreate,
+                             current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return service.create_contact_selection(db, group_id, current_user.id, data.search, data.flags)
+
+
+@router.post("/groups/{group_id}/contacts/bulk-delete")
+def bulk_delete_contacts(group_id: int, data: ContactBulkDelete,
+                         current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return service.bulk_delete_contacts(db, group_id, current_user.id,
+                                        contact_ids=data.contact_ids, selection_id=data.selection_id)
 
 
 @router.post("/contacts", response_model=ContactOut)

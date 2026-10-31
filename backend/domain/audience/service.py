@@ -1,15 +1,18 @@
 import io
 import json
 import math
+from datetime import datetime, timezone, timedelta
+from uuid import uuid4
 from typing import List
-from sqlalchemy import func
+from sqlalchemy import func, case, insert, literal, select
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 import openpyxl
 
-from domain.audience.models import ContactGroup, Contact
-from domain.audience.schemas import GroupCreate, GroupUpdate, ContactCreate, GroupOut, PaginatedResponse
+from domain.audience.models import ContactGroup, Contact, ContactSelection, ContactSelectionItem
+from domain.audience.status import ContactStatusQuery
+from domain.audience.schemas import GroupCreate, GroupUpdate, ContactCreate, GroupOut, PaginatedResponse, ContactListResponse
 
 
 # ========== 客群操作 ==========
@@ -60,20 +63,94 @@ def delete_group(db: Session, group_id: int, user_id: int) -> dict:
 
 
 # ========== 联系人操作 ==========
-def list_contacts(db: Session, group_id: int, user_id: int, search: str = "", page: int = 1, page_size: int = 20) -> PaginatedResponse:
-    _get_user_group(db, group_id, user_id)
-    query = db.query(Contact).filter(Contact.group_id == group_id)
-    if search:
-        query = query.filter(
-            (Contact.name.ilike(f"%{search}%")) | (Contact.email.ilike(f"%{search}%"))
-        )
-
+def list_contacts(db: Session, group_id: int, user_id: int, search: str = "", page: int = 1,
+                  page_size: int = 20, flags=None) -> ContactListResponse:
+    group = _get_user_group(db, group_id, user_id)
+    statuses = ContactStatusQuery(db, user_id, group.owner.email)
+    query = statuses.filter_query(db.query(Contact).filter(Contact.group_id == group_id), search, flags)
     total = query.count()
-    total_pages = max(1, math.ceil(total / page_size))
-    rows = query.order_by(Contact.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
-    items = [{"id": c.id, "email": c.email, "name": c.name, "attributes": c.attributes, "group_id": c.group_id} for c in rows]
+    rows = query.add_columns(*statuses.columns()).order_by(Contact.id.desc()).offset((page - 1) * page_size).limit(page_size).all()
+    items = [{"id": row[0].id, "email": row[0].email, "name": row[0].name, "attributes": row[0].attributes,
+              "group_id": row[0].group_id, **statuses.status_dict(row)} for row in rows]
+    return ContactListResponse(items=items, total=total, page=page, page_size=page_size,
+                               total_pages=max(1, math.ceil(total / page_size)), suppression_sync=statuses.sync_info)
 
-    return PaginatedResponse(items=items, total=total, page=page, page_size=page_size, total_pages=total_pages)
+
+def validate_group(db: Session, group_id: int, user_id: int) -> dict:
+    group = _get_user_group(db, group_id, user_id)
+    statuses = ContactStatusQuery(db, user_id, group.owner.email)
+    # Aggregate the entire group in SQL; never load all contacts into a web worker.
+    row = db.query(func.count(Contact.id), *[
+        func.coalesce(func.sum(case((predicate, 1), else_=0)), 0).label(flag)
+        for flag, predicate in statuses.predicates.items()
+    ]).filter(Contact.group_id == group_id).one()
+    return {"total": row[0], "checked_at": datetime.now(timezone.utc).isoformat(),
+            "counts": {flag: int(getattr(row, flag)) for flag in statuses.predicates},
+            "suppression_sync": statuses.sync_info}
+
+
+def create_contact_selection(db: Session, group_id: int, user_id: int, search: str = "", flags=None) -> dict:
+    group = _get_user_group(db, group_id, user_id)
+    statuses = ContactStatusQuery(db, user_id, group.owner.email)
+    query = statuses.filter_query(db.query(Contact.id).filter(Contact.group_id == group_id), search, flags)
+    now = datetime.utcnow()
+    # Remove expired snapshots with a bounded owner scope. Item IDs are indexed
+    # by selection_id; cascading deletion keeps retention bounded to active use.
+    expired = select(ContactSelection.id).where(ContactSelection.user_id == user_id, ContactSelection.expires_at <= now)
+    db.query(ContactSelectionItem).filter(ContactSelectionItem.selection_id.in_(expired)).delete(synchronize_session=False)
+    db.query(ContactSelection).filter(ContactSelection.user_id == user_id, ContactSelection.expires_at <= now).delete(synchronize_session=False)
+    selection = ContactSelection(id=str(uuid4()), user_id=user_id, group_id=group_id,
+                                 created_at=now, expires_at=now + timedelta(minutes=15))
+    db.add(selection)
+    db.flush()
+    # INSERT ... SELECT freezes exact IDs atomically without a giant Python list.
+    db.execute(insert(ContactSelectionItem).from_select(
+        [ContactSelectionItem.selection_id, ContactSelectionItem.contact_id],
+        query.with_entities(literal(selection.id), Contact.id).statement,
+    ))
+    selected_count = db.query(ContactSelectionItem).filter_by(selection_id=selection.id).count()
+    if not selected_count:
+        db.rollback()
+        raise HTTPException(status_code=400, detail="没有符合条件的联系人")
+    result = {"selection_id": selection.id, "selected_count": selected_count,
+              "expires_at": selection.expires_at.replace(tzinfo=timezone.utc).isoformat()}
+    db.commit()
+    return result
+
+
+def bulk_delete_contacts(db: Session, group_id: int, user_id: int, *, contact_ids=None, selection_id=None) -> dict:
+    _get_user_group(db, group_id, user_id)
+    if (contact_ids is None) == (selection_id is None):
+        raise HTTPException(status_code=400, detail="请选择联系人或筛选结果，不能同时指定")
+    query = db.query(Contact).filter(Contact.group_id == group_id)
+    if contact_ids is not None:
+        if not contact_ids or len(contact_ids) > 1000 or any(type(value) is not int or value <= 0 for value in contact_ids):
+            raise HTTPException(status_code=400, detail="请选择 1 到 1000 个有效联系人")
+        ids = set(contact_ids)
+        existing = query.with_entities(Contact.id).filter(Contact.id.in_(ids)).with_for_update().all()
+        if {row.id for row in existing} != ids:
+            raise HTTPException(status_code=404, detail="部分联系人不存在或不属于当前客群，请刷新后重试")
+        query = query.filter(Contact.id.in_(ids))
+        selection = None
+    else:
+        if not isinstance(selection_id, str) or not selection_id or len(selection_id) > 36:
+            raise HTTPException(status_code=400, detail="无效的选择记录")
+        # A row lock serializes concurrent consumes of the same snapshot.
+        selection = db.query(ContactSelection).filter_by(id=selection_id, group_id=group_id, user_id=user_id).with_for_update().first()
+        if not selection:
+            raise HTTPException(status_code=404, detail="选择记录不存在或已使用，请重新选择")
+        if selection.expires_at <= datetime.utcnow():
+            raise HTTPException(status_code=410, detail="选择已过期，请重新选择联系人")
+        selected_ids = select(ContactSelectionItem.contact_id).where(ContactSelectionItem.selection_id == selection.id)
+        query = query.filter(Contact.id.in_(selected_ids))
+    deleted_count = query.delete(synchronize_session=False)
+    if selection is not None:
+        db.query(ContactSelectionItem).filter_by(selection_id=selection.id).delete(synchronize_session=False)
+        db.delete(selection)
+    db.commit()
+    # The bulk operation bypasses the ORM; don't leave already-loaded contacts stale.
+    db.expire_all()
+    return {"deleted_count": deleted_count}
 
 
 def create_contact(db: Session, data: ContactCreate, user_id: int) -> Contact:

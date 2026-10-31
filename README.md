@@ -29,7 +29,7 @@
 |------|------|
 | 数据概览 | 个人发送统计 Dashboard：今日/本月/总计发送量、每日配额进度、送达率/打开率指标、7 天趋势图 |
 | 客群管理 | 创建/编辑/删除客群，搜索和分页 |
-| 联系人管理 | 批量添加联系人，Excel 导入/导出/模版下载，支持自定义属性（JSON），搜索和分页 |
+| 联系人管理 | 批量添加联系人，Excel 导入/导出/模版下载，支持自定义属性（JSON），搜索和分页；展示人工黑名单、SES 抑制和退订状态 |
 | 邮件模版 | 每个用户独立维护自己的邮件模版（创建/编辑/删除），HTML 实时预览，AI 智能优化 |
 | 批量发送 | 选择模版和目标客群，异步批量发送，自动速率限制，每日配额检查，过滤已退订联系人 |
 | 定时发送 | 单次定时发送、每天/每周/每月周期性发送，支持暂停/恢复，后台自动调度执行 |
@@ -116,6 +116,10 @@ AWS_REGION=us-east-1
 
 # SES Configuration Set（用于 VDM 追踪送达率/打开率，留空则不追踪）
 SES_CONFIGURATION_SET=ses-sender-tracking
+
+# AWS SES 账户级抑制名单自动同步（只读，每 300 秒）
+ENABLE_SES_SUPPRESSION_SYNC=true
+SES_SUPPRESSION_SYNC_INTERVAL_SECONDS=300
 
 # SQS 队列 URL（用于每封邮件的事件追踪，留空则不追踪）
 SQS_QUEUE_URL=
@@ -266,14 +270,14 @@ aws sesv2 create-configuration-set \
   --region us-east-1
 ```
 
-#### Step 2: 关闭 Suppression List（避免邮件被抑制）
+#### Step 2: 检查账户级 Suppression List
 
 ```bash
-aws sesv2 put-configuration-set-suppression-options \
-  --configuration-set-name ses-sender-tracking \
-  --suppressed-reasons \
+aws sesv2 list-suppressed-destinations \
   --region us-east-1
 ```
+
+系统会自动同步当前账户和区域的抑制名单，并在联系人列表展示、发送时过滤；无需关闭抑制功能。详见下文「SES 抑制名单与联系人状态」。
 
 #### Step 3: 配置 VDM 选项（关闭 Optimized Shared Delivery）
 
@@ -536,7 +540,7 @@ CloudWatch 指标从 SES 事件产生到可查询，通常需要 **5-15 分钟**
 | **指标全部为 0** | SES_CONFIGURATION_SET 未生效 | 使用 `docker-compose down && up -d` 而非 `restart` |
 | **指标全部为 0** | 数据延迟 | 等待 15 分钟后再查看 |
 | **Open/Click 为 0，其他有数据** | VDM 未启用 | 执行 Step 5 启用账户级别 VDM |
-| 配置 Configuration Set 后收不到邮件 | Suppression List 抑制了收件邮箱 | 关闭 Configuration Set 的 Suppression List |
+| 配置 Configuration Set 后收不到邮件 | Suppression List 抑制了收件邮箱 | 查看联系人名单状态及 SES 抑制原因；本地已同步的抑制邮箱会在发送前过滤 |
 | 配置 Configuration Set 后收不到邮件 | Optimized Shared Delivery 延迟投递 | 关闭账户和 Configuration Set 级别的 OptimizedSharedDelivery |
 | 配置 Configuration Set 后收不到邮件 | TLS Policy 设为 REQUIRE | 改为 OPTIONAL |
 | SES 返回 Success 但邮件未送达 | Tag 值包含中文等非 ASCII 字符 | 系统已自动过滤，确保使用最新版本 |
@@ -654,6 +658,7 @@ EC2 实例的 IAM Role 需要以下权限：
     "ses:DeleteTemplate",
     "ses:SendEmail",
     "ses:SendBulkTemplatedEmail",
+    "ses:ListSuppressedDestinations",
     "sesv2:SendEmail",
     "sesv2:CreateEmailTemplate",
     "sesv2:UpdateEmailTemplate",
@@ -682,9 +687,28 @@ EC2 实例的 IAM Role 需要以下权限：
 6. **VDM Tag 限制**：SES Message Tag 值只允许 ASCII 字符，系统会自动将中文等非 ASCII 字符替换为下划线。
 7. **SQS 事件追踪**：配置 `SQS_QUEUE_URL` 后，后端自动轮询 SQS 获取每封邮件的送达/退信/打开/点击事件。未配置时服务正常启动，仅无法追踪单封邮件状态。
 8. **Configuration Set 注意事项**：
-   - 必须关闭 Suppression List 和 Optimized Shared Delivery
+   - 账户级 Suppression List 自动同步到本地，发送时过滤命中邮箱；Optimized Shared Delivery 按上述步骤关闭
    - TLS Policy 建议设为 OPTIONAL
    - 修改环境变量后需要 `docker-compose down && docker-compose up -d`，`restart` 不会生效
+
+## SES 抑制名单与联系人状态
+
+后端启动后立即只读拉取当前 AWS 凭据所属账户、`AWS_REGION` 区域的 SES **账户级抑制名单**，之后默认每 300 秒同步一次。该快照不包含其他账户、区域或 SES 全局抑制名单。同步调用 [SES v2 ListSuppressedDestinations](https://docs.aws.amazon.com/ses/latest/APIReference-V2/API_ListSuppressedDestinations.html)，运行角色需有 `ses:ListSuppressedDestinations` 权限；CDK 已配置此权限，现有 Docker Compose / EC2 部署需补充到运行角色。
+
+```env
+ENABLE_SES_SUPPRESSION_SYNC=true
+SES_SUPPRESSION_SYNC_INTERVAL_SECONDS=300
+```
+
+名单保存在独立数据库表中，升级启动时由 Alembic 自动迁移。只有全部分页拉取成功后，才在一个事务内更新本地快照；SES 中移除的记录会在下一次成功同步后从快照清理，管理员维护的人工黑名单保持独立。同步不会新增或删除 AWS 端的抑制记录，也不会修改 SES 抑制设置。AWS 请求失败时保留上次成功快照，之后继续重试。
+
+「客群管理 → 联系人管理」在邮箱旁展示历史退信、人工黑名单、SES 抑制及退订 flag，命中多项时同时展示。SES flag 的提示中区分 `BOUNCE` / `COMPLAINT`。历史退信仅来自当前账号的发送记录；退订按联系人邮箱和当前账号的发件邮箱匹配。历史退信不等于当前 SES 抑制，两个 flag 独立显示。
+
+选择客群后可点击「校验客群」，查看整个客群的状态统计，再按 flag 筛选；多选 flag 表示命中任意一项，并可与姓名或邮箱搜索组合。校验与筛选批量查询本地 SES 同步快照及数据库索引，不逐个邮箱调用 AWS。SES 同步未完成、过期、失败或禁用，以及未配置发件邮箱时，会保留未知状态，不归为「未命中」。
+
+联系人支持逐条勾选、选择当前页，以及显式选择全部筛选结果。跨页全选会固定当时的联系人集合，15 分钟后过期；切换客群、搜索或筛选条件会清空选择。批量删除前确认客群名称与数量，只删除该客群的联系人，不删除其他客群中的同邮箱联系人，也不改变黑名单、退订和历史发送记录。此功能不改变发送策略。
+
+实际批量和定时发送同样过滤本地已同步的 SES 抑制记录、人工黑名单和适用的退订记录。同步存在时间间隔，首次同步完成前或同步失败时，页面与本地发送过滤均以现有快照为准；未命中名单不代表一定能够发送或送达。修改上述环境变量后需重新创建后端容器才能生效。
 
 ## 一键退订
 

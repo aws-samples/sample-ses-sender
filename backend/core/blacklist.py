@@ -1,5 +1,5 @@
 """
-全局邮箱黑名单缓存
+全局邮箱黑名单及当前区域 SES 抑制名单缓存
 
 优先使用 Redis 共享 Set（多实例强一致，增删立即对全部实例生效）；
 Redis 不可用时降级为内存 Set + 后台 60 秒刷新。
@@ -13,12 +13,17 @@ import logging
 from typing import Set
 
 from core import redis_cache
+from core.config import AWS_REGION
 
 logger = logging.getLogger("ses-sender.blacklist")
 
 _REDIS_KEY = "ses:blacklist"
+_SES_REDIS_KEY = f"ses:suppression:{AWS_REGION}"
+_EMPTY_MEMBER = "__empty__"  # Keep an authoritative empty SES snapshot in Redis.
 
 _blacklist: Set[str] = set()
+_ses_suppressions: Set[str] = set()
+_ses_version = -1
 _lock = threading.Lock()
 _running = False
 
@@ -29,8 +34,9 @@ def _norm(email: str) -> str:
 
 def _load_from_db():
     """从数据库加载黑名单到内存 + Redis（若可用）。"""
+    global _ses_version
     from core.database import SessionLocal
-    from domain.sending.models import EmailBlacklist
+    from domain.sending.models import EmailBlacklist, SesSuppressedDestination, SesSuppressionSyncState
 
     db = SessionLocal()
     try:
@@ -39,9 +45,23 @@ def _load_from_db():
         with _lock:
             _blacklist.clear()
             _blacklist.update(emails)
-        # 同步全量到 Redis（不可用时静默忽略）
         redis_cache.replace_set(_REDIS_KEY, emails)
-        logger.info(f"[Blacklist] 已加载 {len(emails)} 个黑名单邮箱")
+        suppressed = {
+            _norm(email) for (email,) in db.query(SesSuppressedDestination.email).filter(
+                SesSuppressedDestination.region == AWS_REGION
+            ).all() if email
+        }
+        state = db.get(SesSuppressionSyncState, AWS_REGION)
+        version = state.version if state else 0
+        with _lock:
+            if version >= _ses_version:
+                _ses_suppressions.clear()
+                _ses_suppressions.update(suppressed)
+                _ses_version = version
+        # Empty snapshots still need a key so other instances don't fall back to
+        # their old, nonempty memory snapshot after AWS removes the last address.
+        redis_cache.replace_versioned_set(_SES_REDIS_KEY, suppressed or {_EMPTY_MEMBER}, version)
+        logger.info(f"[Blacklist] 已加载 {len(emails)} 个人工黑名单、{len(suppressed)} 个 SES 抑制邮箱")
     except Exception as e:
         logger.error(f"[Blacklist] 加载失败: {e}")
     finally:
@@ -66,13 +86,21 @@ def start():
 
 
 def is_blacklisted(email: str) -> bool:
-    """检查邮箱是否在黑名单中。优先查 Redis，失败回退内存。"""
+    """两种来源任一命中即拦截；人工增删只操作人工名单。"""
     e = _norm(email)
     hit = redis_cache.sismember(_REDIS_KEY, e)
-    if hit is not None:
-        return hit
-    with _lock:
-        return e in _blacklist
+    if hit is None:
+        with _lock:
+            hit = e in _blacklist
+    if hit:
+        return True
+    # A missing SES key may mean eviction or a rolling upgrade before the first
+    # cache publish, not an empty authoritative list.
+    ses_hit = redis_cache.sismember(_SES_REDIS_KEY, e) if redis_cache.key_exists(_SES_REDIS_KEY) else None
+    if ses_hit is None:
+        with _lock:
+            ses_hit = e in _ses_suppressions
+    return ses_hit
 
 
 def add(email: str):
